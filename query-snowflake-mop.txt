@@ -1,0 +1,624 @@
+WITH
+cte_installed_meters AS(
+SELECT DISTINCT -- based off MOP Portfolio Health Code version 08052024 v1
+    CONCAT(euitrans.ext_ui,' - ' ,LTRIM(equi.serge,'0')) AS recordid,
+    euihead.int_ui,
+    euitrans.ext_ui AS mpan,
+    LTRIM(equi.serge,'0') AS serge,
+    equi.eqart,
+    euihead.zzcom_tst_i,
+    TRY_TO_DATE(euihead.zzcom_tst_datum, 'YYYYMMDD') AS zzcom_tst_datum,
+    euihead.zzprof_cl,
+    euihead.zzphase,
+    LEFT(euitrans.ext_ui,2) AS mpid,
+    SPLIT_PART(euihead.zzaddr_postcode, ' ', 1) AS outcode,
+    euihead.zzaddress1,
+    euihead.zzaddress2,
+    euihead.zzaddress3,
+    euihead.zzaddress4,
+    euihead.zzaddress5,
+    euihead.zzaddr_region,
+    euihead.zzaddr_city,
+    euihead.zzaddr_district,
+    euihead.zzaddr_postcode,
+    LTRIM(equi.equnr,'0') AS equnr,
+    euihead.zzmet_cop,
+    COUNT(DISTINCT LTRIM(equi.serge, '0')) OVER (PARTITION BY euitrans.ext_ui) AS meterquantity,
+    IFF(COUNT(DISTINCT euitrans.ext_ui) OVER (PARTITION BY LTRIM(equi.serge, '0')) > 1,'TRUE','FALSE') AS multimpan,
+    iflot.ingrp AS iflotingrp,
+    equz.ingrp AS equzingrp,
+    TRY_TO_DATE(egerh.einbdat, 'YYYYMMDD') AS einbdat,
+    TRY_TO_NUMBER(equi.baujj) AS baujj,
+    IFF(((equi.serge LIKE 'K%' AND (equi.serge LIKE '%A%' OR equi.serge LIKE '%B%') AND equi.serge NOT LIKE '%[^ABK]%') OR equi.serge LIKE 'EML%'),'TRUE','FALSE') AS edfmeter,
+    equi.matnr,
+    IFF(TRY_TO_NUMBER(LEFT(egerh.zwgruppe,4)) IS NOT NULL,LEFT(egerh.zwgruppe,4),NULL) AS ssc,
+    egerh.zwgruppe    
+FROM --the below tables are SAP WAM tables, the main source of this report.
+    flk_dub_db_datalake_prd.staging_sap_wam.egerh
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.equi
+        ON egerh.equnr =  equi.equnr
+        AND equi.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.eastl
+        ON egerh.logiknr =  eastl.logiknr
+        AND eastl.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.euiinstln
+        ON euiinstln.anlage =  eastl.anlage
+        AND euiinstln.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.euitrans
+        ON euitrans.int_ui = euiinstln.int_ui
+        AND euitrans.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.jest
+        ON equi.objnr = jest.objnr 
+        AND jest.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.tj02t
+        ON jest.stat = tj02t.istat 
+        AND tj02t.deleteflag = 'FALSE'
+    INNER JOIN   flk_dub_db_datalake_prd.staging_sap_wam.equz
+        ON equz.equnr =  equi.equnr
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.kssk
+        ON equi.equnr = kssk.objek 
+        AND kssk.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.klah
+        ON kssk.clint = klah.clint
+        AND klah.deleteflag = 'FALSE'
+        AND (klah.class LIKE '%METER%' OR klah.class LIKE '%OUTSTATION%')
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.euihead
+        ON euitrans.int_ui = euihead.int_ui
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.eanl
+        ON eanl.anlage = euiinstln.anlage
+        AND eanl.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.evbs
+        ON evbs.vstelle = eanl.vstelle
+        AND evbs.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.iflot
+        ON iflot.tplnr = evbs.haus
+        AND iflot.deleteflag = 'FALSE'
+WHERE--data is filtered to meters that are currently installed 
+    TRY_TO_DATE(egerh.bis, 'YYYYMMDD') >= CURRENT_DATE
+    AND TRY_TO_DATE(eastl.bis, 'YYYYMMDD') >= CURRENT_DATE
+    AND egerh.deleteflag = 'FALSE'
+    AND upper(jest.inact) != 'X'
+    AND tj02t.txt04 = 'INST'
+    AND equz.datbi = '99991231'
+    AND equz.ingrp IS NOT NULL),
+    
+--below CTEs are for characteristics of the meter
+cte_communication_address AS (-- retrieves the communication address for each meter
+    SELECT DISTINCT
+        ausp.objek AS equnr,
+        cabn.atnam,
+        ausp.atwrt
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.ausp AS ausp
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.cabn AS cabn
+            ON ausp.atinn = cabn.atinn
+            AND cabn.atnam = 'COMMUNICATION-ADDRESS'
+    WHERE ausp.deleteflag = 'FALSE'),
+cte_communication_method AS (-- retrieves the communication method for each meter
+    SELECT DISTINCT
+        ausp.objek AS equnr,
+        cabn.atnam,
+        ausp.atwrt
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.ausp AS ausp
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.cabn AS cabn
+            ON ausp.atinn = cabn.atinn
+            AND cabn.atnam = 'COMMUNICATION-METHOD'
+    WHERE ausp.deleteflag = 'FALSE'),
+cte_communication_provider AS (-- retrieves the communication provider for each meter
+    SELECT DISTINCT
+        ausp.objek AS equnr,
+        cabn.atnam,
+        ausp.atwrt
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.ausp AS ausp
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.cabn AS cabn
+            ON ausp.atinn = cabn.atinn
+            AND cabn.atnam = 'COMMUNICATIONS-PROVIDER'
+    WHERE ausp.deleteflag = 'FALSE'),
+cte_ct_ratio AS (-- retrieves the CT ratio for each meter
+    SELECT DISTINCT
+        ausp.objek AS equnr,
+        cabn.atnam,
+        ausp.atwrt
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.ausp AS ausp
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.cabn AS cabn
+            ON ausp.atinn = cabn.atinn
+            AND cabn.atnam = 'CT-RATIO'
+    WHERE ausp.deleteflag = 'FALSE'),
+cte_map_id AS (-- retrieves the meter asset provider id for each meter
+    SELECT DISTINCT
+        ausp.objek AS equnr,
+        cabn.atnam,
+        ausp.atwrt
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.ausp AS ausp
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.cabn AS cabn
+            ON ausp.atinn = cabn.atinn
+            AND cabn.atnam = 'MAP-ID'
+    WHERE ausp.deleteflag = 'FALSE'),
+cte_outstation_id AS (-- retrieves the outstation id for each meter
+    SELECT DISTINCT
+        ausp.objek AS equnr,
+        cabn.atnam,
+        ausp.atwrt
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.ausp AS ausp
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.cabn AS cabn
+            ON ausp.atinn = cabn.atinn
+            AND cabn.atnam = 'OUTSTATION-ID'
+    WHERE ausp.deleteflag = 'FALSE'),
+cte_outstation_pin AS (-- retrieves the outstation pin for each meter
+    SELECT DISTINCT
+        ausp.objek AS equnr,
+        cabn.atnam,
+        ausp.atwrt
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.ausp AS ausp
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.cabn AS cabn
+            ON ausp.atinn = cabn.atinn
+            AND cabn.atnam = 'OUTSTATION-PIN'
+    WHERE ausp.deleteflag = 'FALSE'),
+cte_level_2_password AS (-- retrieves the level 2 password for each meter
+    SELECT DISTINCT
+        ausp.objek AS equnr,
+        cabn.atnam,
+        ausp.atwrt
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.ausp AS ausp
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.cabn AS cabn
+            ON ausp.atinn = cabn.atinn
+            AND cabn.atnam = 'OUTSTATION-PWD-LEVEL-2'
+    WHERE ausp.deleteflag = 'FALSE'),
+cte_level_3_password AS (-- retrieves the level 3 password for each meter
+    SELECT DISTINCT
+        ausp.objek AS equnr,
+        cabn.atnam,
+        ausp.atwrt
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.ausp AS ausp
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.cabn AS cabn
+            ON ausp.atinn = cabn.atinn
+            AND cabn.atnam = 'OUTSTATION-PWD-LEVEL-3'
+    WHERE ausp.deleteflag = 'FALSE'),
+cte_level_4_password AS (-- retrieves the level 4 password for each meter
+    SELECT DISTINCT
+        ausp.objek AS equnr,
+        cabn.atnam,
+        ausp.atwrt
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.ausp AS ausp
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.cabn AS cabn
+            ON ausp.atinn = cabn.atinn
+            AND cabn.atnam = 'OUTSTATION-PWD-LEVEL-4'
+    WHERE ausp.deleteflag = 'FALSE'),
+cte_outstation_type AS (-- retrieves the outstation type for each meter
+    SELECT DISTINCT
+        ausp.objek AS equnr,
+        cabn.atnam,
+        ausp.atwrt
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.ausp AS ausp
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.cabn AS cabn
+            ON ausp.atinn = cabn.atinn
+            AND cabn.atnam = 'OUTSTATION-TYPE'
+    WHERE ausp.deleteflag = 'FALSE'),
+cte_level_2_username AS (-- retrieves the level 2 username for each meter
+    SELECT DISTINCT
+        ausp.objek AS equnr,
+        cabn.atnam,
+        ausp.atwrt
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.ausp AS ausp
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.cabn AS cabn
+            ON ausp.atinn = cabn.atinn
+            AND cabn.atnam = 'OUTSTATION-USERNAME-LEVEL-2'
+    WHERE ausp.deleteflag = 'FALSE'),
+cte_level_3_username AS (-- retrieves the level 3 username for each meter
+    SELECT DISTINCT
+        ausp.objek AS equnr,
+        cabn.atnam,
+        ausp.atwrt
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.ausp AS ausp
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.cabn AS cabn
+            ON ausp.atinn = cabn.atinn
+            AND cabn.atnam = 'OUTSTATION-USERNAME-LEVEL-3'
+    WHERE ausp.deleteflag = 'FALSE'),
+cte_vt_ratio AS (-- retrieves the VT ratio for each meter
+    SELECT DISTINCT
+        ausp.objek AS equnr,
+        cabn.atnam,
+        ausp.atwrt
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.ausp AS ausp
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.cabn AS cabn
+            ON ausp.atinn = cabn.atinn
+            AND cabn.atnam = 'VT-RATIO'
+    WHERE ausp.deleteflag = 'FALSE'),
+    
+--the below CTEs are for agent appointments or MPAN specific information
+cte_energisation_status AS (-- retrieves the latest energisation status for each MPAN
+    WITH cte_energisation_statuses_all AS(
+        SELECT
+            ROW_NUMBER() OVER (PARTITION BY zmop_pod_eng_st.zzext_ui ORDER BY zmop_pod_eng_st.zzeng_bis DESC) AS rn,
+            zmop_pod_eng_st.zzext_ui,
+            zmop_pod_eng_st.zzeng_stat,
+            try_to_date(zmop_pod_eng_st.zzeng_ab, 'YYYYMMDD') AS zzeng_ab
+        FROM
+            flk_dub_db_datalake_prd.staging_sap_wam.zmop_pod_eng_st
+        WHERE zmop_pod_eng_st.deleteflag = 'FALSE'
+            and try_to_date(zmop_pod_eng_st.zzeng_ab, 'YYYYMMDD') IS NOT NULL
+        ORDER BY zmop_pod_eng_st.zzext_ui, rn)
+    SELECT DISTINCT
+            cte_energisation_statuses_all.zzext_ui AS mpan,
+            cte_energisation_statuses_all.zzeng_stat,
+            cte_energisation_statuses_all.zzeng_ab
+    FROM cte_energisation_statuses_all
+    WHERE cte_energisation_statuses_all.rn = 1),
+
+cte_open_faults AS (--retrieves all open faults for each MPAN
+    WITH cte_all_faults AS(--retrieves all service orders and concatenates active statuses to create unique row per service order
+        SELECT DISTINCT
+            qmel.zzext_ui,
+            qmel.zzserge,
+            LTRIM(qmel.qmnum,'0') AS qmnum,
+            LISTAGG(tj02t.txt04,',') WITHIN GROUP (ORDER BY qmel.qmnum) AS txt04
+        FROM flk_dub_db_datalake_prd.staging_sap_wam.qmel
+            INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.qmih
+                ON qmih.qmnum = qmel.qmnum
+                AND qmih.deleteflag = 'FALSE'
+            INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.jest
+                ON jest.objnr = qmel.objnr
+                AND jest.deleteflag = 'FALSE'
+                AND jest.inact <> 'X'
+            INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.tj02t
+                ON tj02t.istat = jest.stat
+                AND tj02t.spras = 'E'
+                AND tj02t.deleteflag = 'FALSE'
+        WHERE qmel.deleteflag = 'FALSE'
+            AND qmel.qmcod = '0001'
+            AND qmih.ingrp in ('HH', 'RNH', 'CNH') 
+        GROUP BY qmel.zzext_ui,
+            qmel.zzserge,
+            qmel.qmnum)
+    SELECT DISTINCT
+        cte_all_faults.zzext_ui AS mpan
+    FROM cte_all_faults
+    WHERE cte_all_faults.txt04 NOT LIKE '%NOCO%'),
+
+cte_open_service_orders AS (--retrieves any open service orders for each MPAN
+    WITH cte_service_order_statuses AS (--retrieves all service orders and concatenates active statuses to create unique row per service order
+        SELECT DISTINCT
+            aufk.zzext_ui,
+            afko.aufpl,
+            LTRIM(afko.aufnr,'0') AS aufnr,
+            LISTAGG(tj02t.txt04,',') WITHIN GROUP (ORDER BY afko.aufnr) AS txt04
+        FROM flk_dub_db_datalake_prd.staging_sap_wam.afko
+            LEFT JOIN flk_dub_db_datalake_prd.staging_sap_wam.afvc
+                ON afvc.aufpl = afko.aufpl
+                AND afvc.deleteflag = 'FALSE'
+            LEFT JOIN flk_dub_db_datalake_prd.staging_sap_wam.aufk
+                ON aufk.aufnr = afko.aufnr
+                AND aufk.deleteflag = 'FALSE'
+            INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.jest
+                ON jest.objnr = aufk.objnr
+                AND jest.deleteflag = 'FALSE'
+                AND jest.inact <> 'X'
+            INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.tj02t
+                ON tj02t.istat = jest.stat
+                AND tj02t.spras = 'E'
+        WHERE afko.deleteflag = 'FALSE'
+            --AND afko.plgrp IN ('CNH','HH','RNH')
+        GROUP BY aufk.zzext_ui,afko.aufpl,afko.aufnr)
+    SELECT DISTINCT --filters to service orders identified as 'Open', where there is no active status against the service order marking it as closed
+        CASE
+            WHEN cte_service_order_statuses.zzext_ui <> objk.sortf
+                AND objk.sortf IS NOT NULL
+            THEN CONCAT(cte_service_order_statuses.zzext_ui,'&',objk.sortf)
+            ELSE cte_service_order_statuses.zzext_ui
+            END AS MPANS,
+        CASE 
+            WHEN cte_service_order_statuses.txt04 NOT LIKE '%CLSD%'
+                AND cte_service_order_statuses.txt04 NOT LIKE '%DLFL%'
+                AND cte_service_order_statuses.txt04 NOT LIKE '%DLT%'
+                AND cte_service_order_statuses.txt04 NOT LIKE '%TECO%'
+            THEN 'Open'
+            ELSE 'Closed'
+            END AS ServiceOrderStatus
+    FROM cte_service_order_statuses
+        LEFT JOIN flk_dub_db_datalake_prd.staging_sap_wam.oprol
+            ON oprol.aufpl = cte_service_order_statuses.aufpl
+            AND oprol.deleteflag = 'FALSE'
+        LEFT JOIN flk_dub_db_datalake_prd.staging_sap_wam.objk
+            ON objk.obknr = oprol.obknr
+            AND objk.deleteflag = 'FALSE'
+            AND objk.sortf <> ''
+    WHERE ServiceOrderStatus = 'Open'),
+
+cte_appointed_dc AS (--retrieves the appointed DC for each MPAN
+    SELECT
+        eservice.int_ui,
+        eservice.service,
+        RIGHT(eservice.serviceid,4) AS serviceid,
+        TRY_TO_DATE(eservice.service_start, 'YYYYMMDD') AS service_start,
+        TRY_TO_DATE(eservice.service_end, 'YYYYMMDD') AS service_end,
+        CASE
+            WHEN eservice.service = 'C' THEN 'HH'
+            WHEN eservice.service = 'D' THEN 'NHH'
+            ELSE NULL
+            END AS ServiceType,
+        eservice.zzterm_reason
+    FROM
+        flk_dub_db_datalake_prd.staging_sap_wam.eservice AS eservice
+    WHERE eservice.deleteflag = 'FALSE'
+        AND TRY_TO_DATE(eservice.service_end, 'YYYYMMDD') > CURRENT_DATE
+        AND TRY_TO_DATE(eservice.service_start, 'YYYYMMDD') <= CURRENT_DATE
+        AND eservice.service IN ('C','D')),
+
+cte_appointed_supplier AS (--retrieves the appointed supplier for each MPAN
+    SELECT
+        eservice.int_ui,
+        eservice.service,
+        RIGHT(eservice.serviceid,4) AS serviceid,
+        TRY_TO_DATE(eservice.service_start, 'YYYYMMDD') AS service_start,
+        TRY_TO_DATE(eservice.service_end, 'YYYYMMDD') AS service_end,
+        eservice.zzterm_reason
+    FROM
+        flk_dub_db_datalake_prd.staging_sap_wam.eservice AS eservice
+    WHERE eservice.deleteflag = 'FALSE'
+        AND TRY_TO_DATE(eservice.service_end, 'YYYYMMDD') > CURRENT_DATE
+        AND TRY_TO_DATE(eservice.service_start, 'YYYYMMDD') <= CURRENT_DATE
+        AND eservice.service = 'X'),
+
+cte_edf_active_mop AS (--retrieves the appointed supplier for each MPAN
+    SELECT
+        eservice.int_ui,
+        eservice.service,
+        RIGHT(eservice.serviceid,4) AS serviceid,
+        TRY_TO_DATE(eservice.service_start, 'YYYYMMDD') AS service_start,
+        TRY_TO_DATE(eservice.service_end, 'YYYYMMDD') AS service_end,
+        eservice.zzterm_reason
+    FROM
+        flk_dub_db_datalake_prd.staging_sap_wam.eservice AS eservice
+    WHERE eservice.deleteflag = 'FALSE'
+        AND TRY_TO_DATE(eservice.service_end, 'YYYYMMDD') > CURRENT_DATE
+        AND TRY_TO_DATE(eservice.service_start, 'YYYYMMDD') <= CURRENT_DATE
+        AND eservice.serviceid = 'MLOND'),
+
+cte_edf_mop_appointments_all AS (--retrieves the live contract flag for each MPAN which is used to determine if the meter was installed during any period where EDF MOP was appointed
+    SELECT
+        eservice.int_ui,
+        eservice.service,
+        eservice.serviceid,
+        TRY_TO_DATE(eservice.service_start, 'YYYYMMDD') AS service_start,
+        TRY_TO_DATE(eservice.service_end, 'YYYYMMDD') AS service_end,
+        eservice.zzterm_reason
+    FROM
+        flk_dub_db_datalake_prd.staging_sap_wam.eservice AS eservice
+    WHERE eservice.deleteflag = 'FALSE'
+        AND eservice.serviceid = 'MLOND'
+        AND TRY_TO_DATE(eservice.service_start, 'YYYYMMDD') IS NOT NULL
+        AND TRY_TO_DATE(eservice.service_end, 'YYYYMMDD') IS NOT NULL),
+
+cte_contract_flag AS (--retrieves the live contract flag for each MPAN
+    SELECT
+        eservice.int_ui,
+        eservice.service,
+        eservice.serviceid,
+        TRY_TO_DATE(eservice.service_start, 'YYYYMMDD'),
+        TRY_TO_DATE(eservice.service_end, 'YYYYMMDD'),
+        eservice.zzterm_reason
+    FROM
+        flk_dub_db_datalake_prd.staging_sap_wam.eservice AS eservice
+    WHERE eservice.deleteflag = 'FALSE'
+        AND TRY_TO_DATE(eservice.service_end, 'YYYYMMDD') > CURRENT_DATE
+        AND TRY_TO_DATE(eservice.service_start, 'YYYYMMDD') <= CURRENT_DATE
+        AND eservice.serviceid = 'ZCUST'),
+
+cte_mpan_map AS (--retrieves the live contract flag for each MPAN
+    SELECT
+        eservice.int_ui,
+        eservice.service,
+        LTRIM(eservice.serviceid,'8') AS serviceid,
+        TRY_TO_DATE(eservice.service_start, 'YYYYMMDD'),
+        TRY_TO_DATE(eservice.service_end, 'YYYYMMDD'),
+        eservice.zzterm_reason
+    FROM
+        flk_dub_db_datalake_prd.staging_sap_wam.eservice AS eservice
+    WHERE eservice.deleteflag = 'FALSE'
+        AND TRY_TO_DATE(eservice.service_end, 'YYYYMMDD') > CURRENT_DATE
+        AND TRY_TO_DATE(eservice.service_start, 'YYYYMMDD') <= CURRENT_DATE
+        AND eservice.service = '8'),
+
+cte_contact_info AS (
+    SELECT DISTINCT
+        euitrans.ext_ui AS mpan,
+        IFF(adrc.NAME2 <> '' AND adrc.NAME2 <> adrc.NAME1,CONCAT(adrc.NAME1,' ',adrc.NAME2),adrc.NAME1) AS name,
+        adrc.tel_number
+    FROM
+        flk_dub_db_datalake_prd.staging_sap_wam.euiinstln
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.euitrans
+            ON euitrans.int_ui = euiinstln.int_ui
+            AND euitrans.deleteflag = 'FALSE'
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.eanl
+            ON eanl.anlage = euiinstln.anlage
+            AND eanl.deleteflag = 'FALSE'
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.evbs
+            ON evbs.vstelle = eanl.vstelle
+            AND evbs.deleteflag = 'FALSE'
+        INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.iflot
+            ON iflot.tplnr = evbs.haus
+            AND iflot.deleteflag = 'FALSE'
+        LEFT JOIN flk_dub_db_datalake_prd.staging_sap_wam.iloa
+            ON iloa.tplnr = iflot.tplnr
+            AND iloa.iloan = iflot.iloan
+        LEFT JOIN flk_dub_db_datalake_prd.staging_sap_wam.adrc
+            ON adrc.addrnumber = iloa.adrnr
+    WHERE euiinstln.deleteflag = 'FALSE'
+        AND adrc.DATE_TO = '99991231'),
+
+cte_krakken AS (
+    SELECT 
+        mpxn AS mpan,
+        market,
+        portfolio
+        --,from_date
+FROM flk_dub_db_datalake_prd.prod_output_kraken_cnp.cnp_portfolio)
+    
+SELECT DISTINCT -- based off MOP Portfolio Health Code version 08052024 v1
+    cte_installed_meters.recordid AS record_id,
+    cte_installed_meters.mpan,
+    cte_installed_meters.serge AS msn,
+    CASE
+        WHEN cte_installed_meters.eqart = 'H' THEN 'HH'
+        WHEN cte_installed_meters.eqart IN ('RCAMR','RCAMY','NCAMR') THEN 'AMR'
+        WHEN cte_installed_meters.eqart = 'N' THEN 'Legacy NHH'
+        WHEN LEFT(cte_installed_meters.eqart,1) IN ('S','1','2') THEN 'SMART'
+        ELSE 'Other N'
+        END AS meter_category,
+    cte_edf_active_mop.service_start AS mop_start,
+    cte_edf_active_mop.service_end AS mop_end,
+    CASE
+        WHEN cte_appointed_supplier.serviceid IS NULL
+            THEN 'Unknown'
+        WHEN cte_appointed_supplier.serviceid NOT IN ('EDFE','LOND','SEEB','SWEB')
+            THEN 'T2'
+        WHEN c2mliveonsupply."Service Point" IS NULL OR cte_appointed_supplier.serviceid = 'EDFE'
+            THEN 'SME'
+        WHEN cte_appointed_supplier.serviceid IN ('LOND','SEEB','SWEB')
+            THEN 'EBS'
+        ELSE NULL
+        END AS supplier_tier,
+    CASE 
+        WHEN c2mliveonsupply."Service Point" IS NOT NULL AND cte_krakken.market IS NOT NULL
+            THEN 'Both'
+        WHEN c2mliveonsupply."Service Point" IS NOT NULL AND cte_krakken.market IS NULL
+            THEN 'C2M'
+        WHEN c2mliveonsupply."Service Point" IS NULL AND cte_krakken.market IS NOT NULL
+            THEN 'Krakken'
+        ELSE 'None'
+        END AS edf_system,
+    cte_krakken.market,
+    cte_appointed_supplier.serviceid AS supplier,
+    cte_appointed_supplier.service_start AS supplier_start,
+    cte_appointed_supplier.service_end AS supplier_end,
+    cte_appointed_dc.ServiceType AS dc_service_type,
+    cte_appointed_dc.serviceid AS dc,
+    cte_appointed_dc.service_start AS dc_start,
+    cte_appointed_dc.service_end AS dc_end,
+    IFF(cte_contract_flag.serviceid IS NOT NULL,'TRUE','FALSE') AS direct_contract_flag,
+    IFF(cte_open_faults.mpan IS NOT NULL,'TRUE','FALSE') AS open_fault,
+    IFF(cte_open_service_orders.MPANS IS NOT NULL,'TRUE','FALSE') AS open_service_order,
+    cte_installed_meters.zzcom_tst_i AS commission_status,
+    cte_installed_meters.zzcom_tst_datum AS commission_status_date,
+    cte_energisation_status.zzeng_stat AS energised_status,
+    cte_energisation_status.zzeng_ab AS energised_status_date,
+    cte_installed_meters.zzprof_cl AS profile_class,
+    cte_installed_meters.zzphase AS phase,
+    c2mliveonsupply."Customer Name" AS ebs_energy_customer,
+    c2mliveonsupply."Sales Segment" AS ebs_energy_segment,
+    c2mliveonsupply."Micro Indicator" AS ebs_energy_micro_flag,
+    c2mliveonsupply."Annualised Consumption (kWh)" AS ebs_energy_eac,
+    c2m_sp.meteroperatorkey AS ebs_energy_mop,
+    cte_contact_info.name AS sap_contact_name,
+    cte_contact_info.tel_number AS sap_contact_number,
+    cte_installed_meters.mpid AS dno,
+    cte_installed_meters.outcode AS outcode,
+    cte_installed_meters.zzaddress1 AS street1,
+    cte_installed_meters.zzaddress2 AS street2,
+    cte_installed_meters.zzaddress3 AS street3,
+    cte_installed_meters.zzaddress4 AS street4,
+    cte_installed_meters.zzaddress5 AS street5,
+    cte_installed_meters.zzaddr_region AS region,
+    cte_installed_meters.zzaddr_city AS city,
+    cte_installed_meters.zzaddr_district AS district,
+    cte_installed_meters.zzaddr_postcode AS postcode,
+    cte_installed_meters.equnr AS meter_qualifier,
+    cte_installed_meters.zzmet_cop AS cop,
+    cte_installed_meters.meterquantity AS meter_quantity,
+    cte_installed_meters.multimpan AS multi_mpan,
+    cte_installed_meters.eqart AS meter_type,
+    cte_installed_meters.equzingrp AS meter_planner_group,
+    cte_installed_meters.iflotingrp AS mpan_planner_group,
+    IFF(cte_installed_meters.equzingrp = cte_installed_meters.iflotingrp,'TRUE','FALSE') AS planner_group_match,
+    cte_installed_meters.einbdat AS install_date,
+    cte_installed_meters.baujj AS manufactured_year,
+    IFF(cte_outstation_type.atwrt IN ('E06','E07','E10')
+        AND cte_installed_meters.baujj > 2007
+        AND TRY_TO_NUMBER(REGEXP_REPLACE(cte_ct_ratio.atwrt, '[^a-zA-Z0-9 ]','')) IS NULL,TO_NUMBER(9999),TRY_TO_NUMBER(cte_installed_meters.baujj) + 10) AS recert_year,
+    cte_mpan_map.serviceid AS mpan_map,
+    cte_map_id.atwrt AS meter_map,
+    IFF(mpan_map=meter_map,'TRUE','FALSE') AS map_match,
+    cte_installed_meters.edfmeter AS potential_edf_msn,
+    IFF(cte_edf_mop_appointments_all.service_start IS NOT NULL,'TRUE','FALSE') AS installed_while_mop,
+    IFF(cte_edf_active_mop.service_start <= cte_installed_meters.einbdat,'TRUE','FALSE') AS installed_in_current_mop_appointment,
+    CASE --we know there's a concern around data quality when identifying if EDF is the MAP of a meter. This is to determine if EDF possibly could have installed the meter based off the install date being within an EDF appointment period or if the meter serial number matches the schema of EDF's typical serial numbers.
+        WHEN cte_map_id.atwrt IN ('ECSM','EDFE','LOND') THEN 'Yes-MAP'
+        WHEN cte_map_id.atwrt = 'CUST' AND installed_while_mop = 'TRUE' AND potential_edf_msn = 'TRUE' THEN 'Yes-(CUST) MSN & MOP'
+        WHEN cte_map_id.atwrt = 'CUST' AND installed_while_mop = 'TRUE' THEN 'Yes-(CUST) MOP'
+        WHEN cte_map_id.atwrt = 'CUST' AND potential_edf_msn = 'TRUE' THEN 'Yes-(CUST) MSN'
+        WHEN cte_map_id.atwrt NOT IN ('CUST','ECSM','EDFE','LOND') AND installed_while_mop = 'TRUE' AND potential_edf_msn = 'TRUE' THEN 'Unknown - MSN & MOP'
+        WHEN cte_map_id.atwrt NOT IN ('CUST','ECSM','EDFE','LOND') AND installed_while_mop = 'TRUE' THEN 'Unknown - MOP'
+        WHEN cte_map_id.atwrt NOT IN ('CUST','ECSM','EDFE','LOND') AND potential_edf_msn = 'TRUE' THEN 'Unknown - MSN'
+        ELSE 'No'
+        END AS installed_by_edf,
+    cte_installed_meters.matnr AS device_category,
+    cte_outstation_type.atwrt AS outstation_type,
+    cte_installed_meters.ssc AS ssc,
+    cte_installed_meters.zwgruppe AS register_group,
+    IFF(TRY_TO_NUMBER(REGEXP_REPLACE(cte_ct_ratio.atwrt, '[^a-zA-Z0-9 ]', '')) IS NOT NULL,'CT','WC') AS wc_or_ct,
+    cte_ct_ratio.atwrt AS ct_ratio,
+    IFF(TRY_TO_NUMBER(REGEXP_REPLACE(cte_vt_ratio.atwrt, '[^a-zA-Z0-9 ]', '')) IS NOT NULL,'HV','LV') AS lv_or_hv,
+    cte_vt_ratio.atwrt AS vt_ratio,
+    cte_communication_method.atwrt AS communication_method,
+    cte_communication_address.atwrt AS communication_address,
+    cte_communication_provider.atwrt AS communication_provider,
+    cte_outstation_id.atwrt AS outstation_id,
+    cte_outstation_pin.atwrt AS outstation_pin,
+    cte_level_2_username.atwrt AS level_2_username,
+    cte_level_2_password.atwrt AS level_2_password,
+    cte_level_3_username.atwrt AS level_3_username,
+    cte_level_3_password.atwrt AS level_3_password,
+    cte_level_4_password.atwrt AS level_4_password,
+    CASE --reference to identify the level 4 password of the meter, used by engineers to configure the meter appropriately on site. an external spreadsheet holds the actual passwords, seems to only be for Elsters???
+        WHEN LEFT(REPLACE(cte_level_3_password.atwrt,' ',''),3) = 'EFS'
+            AND TRY_TO_NUMBER(SUBSTR(REPLACE(cte_level_3_password.atwrt, ' ', ''), 4, 1)) IS NOT NULL
+            OR REPLACE(cte_level_3_password.atwrt, ' ', '') = 'DEFAULT'
+            THEN REPLACE(cte_level_3_password.atwrt,' ','')
+        WHEN LEFT(REPLACE(cte_level_4_password.atwrt,' ',''),3) = 'EFS'
+            AND TRY_TO_NUMBER(SUBSTR(REPLACE(cte_level_4_password.atwrt, ' ', ''), 4, 1)) IS NOT NULL
+            OR REPLACE(cte_level_4_password.atwrt, ' ', '') = 'DEFAULT'
+            THEN REPLACE(cte_level_4_password.atwrt,' ','')
+        ELSE NULL
+        END AS efs_password_reference
+    
+FROM cte_installed_meters
+    ----the below tables are EBS energy supplier tables, left joined on euitrans.ext_ui (MPAN)
+    LEFT JOIN flk_dub_db_datalake_prd.persist_iac.p_servicepoint AS c2m_sp
+        ON cte_installed_meters.mpan = c2m_sp.mpancore
+        AND c2m_sp.isactive = 1
+    LEFT JOIN flk_dub_db_datalake_prd.dim_consumption_iac."tbl_Portfolio_Live_Master" AS c2mliveonsupply --"golden table" for EBS supply's portfolio. not perfect, but in the process of being replaced with an actual golden table created by Charlie Reeve
+        ON c2mliveonsupply."Service Point" = cte_installed_meters.mpan
+    ----the below tables are CTE tables created at the beginning of this query specific to the meter, left joined on equi.equnr (unique id of the meter serial number)
+    LEFT JOIN cte_communication_address USING(equnr)
+    LEFT JOIN cte_communication_method USING(equnr)
+    LEFT JOIN cte_communication_provider USING(equnr)
+    LEFT JOIN cte_ct_ratio USING(equnr)
+    LEFT JOIN cte_map_id USING(equnr)
+    LEFT JOIN cte_outstation_id USING(equnr)
+    LEFT JOIN cte_outstation_pin USING(equnr)
+    LEFT JOIN cte_level_2_password USING(equnr)
+    LEFT JOIN cte_level_3_password USING(equnr)
+    LEFT JOIN cte_level_4_password USING(equnr)
+    LEFT JOIN cte_outstation_type USING(equnr)
+    LEFT JOIN cte_level_2_username USING(equnr)
+    LEFT JOIN cte_level_3_username USING(equnr)
+    LEFT JOIN cte_vt_ratio USING(equnr)
+    ----the below tables are CTE tables created at the beginning of this query specific to the MPAN. left joined on euitrans.ext_ui (MPAN)
+    LEFT JOIN cte_energisation_status USING(mpan)
+    LEFT JOIN cte_open_faults USING(mpan)
+    LEFT JOIN cte_contact_info USING(mpan)
+    LEFT JOIN cte_krakken USING(mpan)
+    LEFT JOIN cte_open_service_orders
+        ON cte_open_service_orders.MPANS LIKE '%' || cte_installed_meters.mpan || '%'
+    ----the below tables are CTE tables created at the beginning of this query specific to the MPAN. left joined on euihead.int_ui (internal id of the MPAN)
+    LEFT JOIN cte_appointed_dc USING(int_ui)
+    LEFT JOIN cte_appointed_supplier USING(int_ui)
+    LEFT JOIN cte_contract_flag USING(int_ui)
+    LEFT JOIN cte_mpan_map USING(int_ui)
+    LEFT JOIN cte_edf_active_mop USING(int_ui)
+    LEFT JOIN cte_edf_mop_appointments_all
+        ON cte_edf_mop_appointments_all.int_ui = cte_installed_meters.int_ui
+        AND cte_edf_mop_appointments_all.service_start <= cte_installed_meters.einbdat
+        AND cte_edf_mop_appointments_all.service_end >= cte_installed_meters.einbdat
+WHERE cte_edf_active_mop.serviceid IS NOT NULL
+    AND (cte_installed_meters.eqart IN ('H', 'RCAMY', 'RCAMR', 'NCAMR') OR cte_appointed_supplier.serviceid <> 'EDFE')
+     
