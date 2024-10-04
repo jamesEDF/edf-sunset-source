@@ -2,6 +2,7 @@
 library(edfr)
 library(readr)
 library(dplyr)
+library(data.table)
 
 # Get today's date in YYYY-MM-DD format
 today_date <- Sys.Date()
@@ -11,26 +12,29 @@ base_path <- "C:/Users/dyer07j/Desktop/Coding/sunset_github REPO/edf-sunset-sour
 # Read entire query into a single string variable
 sqlquery_sup <- read_file(file.path(base_path, "query-snowflake-sup.txt"))
 sqlquery_mop <- read_file(file.path(base_path, "query-snowflake-mop.txt"))
+# sqlquery_sme <- read_file(file.path(base_path, "query-snowflake-sme.txt"))
+
 
 # # the below is commented out to save on load times and £cost of Snowflake
-  # # run query request using variable
+# # run query request using variable
 # df_sup <- query_sf(sqlquery_sup, show.query = TRUE) # current load time: <1min
 # df_mop <- query_sf(sqlquery_mop, show.query = TRUE) # current load time: ~25mins
+# # df_sme <- query_sf(sqlquery_sme, show.query = TRUE) # current load time: <1min
 # # Export queries to CSV files
 # write_csv(df_sup, file.path(base_path, paste0("exported-data/df_sup_", today_date, ".csv")))
 # write_csv(df_mop, file.path(base_path, paste0("exported-data/df_mop_", today_date, ".csv")))
+# # write_csv(df_sme, file.path(base_path, paste0("exported-data/df_sme_", today_date, ".csv")))
 
 
 # Read exported CSV files
-df_sup <- read_csv(file.path(base_path, "exported-data/df_sup.csv"), 
+df_sup <- read_csv(file.path(base_path, paste0("exported-data/df_sup_", today_date, ".csv")), 
                    col_types = cols(
                      mpan = col_character(),
                      date_installed = col_date(format = "%Y-%m-%d"),
                      .default = col_guess()   # Guess the rest
                    ))
 
-
-df_mop <- read_csv(file.path(base_path, "exported-data/df_mop.csv"), 
+df_mop <- read_csv(file.path(base_path, paste0("exported-data/df_mop_", today_date, ".csv")), 
                    col_types = cols(
                      mpan = col_character(),  # Define specific columns
                      mop_start = col_date(format = "%Y-%m-%d"),
@@ -45,7 +49,24 @@ df_mop <- read_csv(file.path(base_path, "exported-data/df_mop.csv"),
                      .default = col_guess()   # Guess the rest
                    ))
 
+# df_sme <- read_csv(file.path(base_path, paste0("exported-data/df_sme_", today_date, ".csv")), 
+#                    col_types = cols(
+#                      mpan = col_character(),
+#                      meter_id = col_character(),
+#                      meter_point_id = col_character(),
+#                      product_end_date = col_date(format = "%Y-%m-%d"),
+#                      agreement_start_date = col_date(format = "%Y-%m-%d"),
+#                      meterpoint_supply_start_date = col_date(format = "%Y-%m-%d"),
+#                      .default = col_guess()   # Guess the rest
+#                    ))
 
+# read external files
+df_ltnr <- read_csv(
+  file.path(base_path, "external-data", "LTNR.csv"),
+  col_types = cols(Service_Point = col_character()),
+  col_select = "Service_Point"
+)
+                             
 df_sup <- df_sup %>%
   rename(
     install_date = date_installed
@@ -55,34 +76,61 @@ df_sup <- df_sup %>%
 # df_sup <- df_sup %>% select(-column1, -column2)
 df_mop <- df_mop %>% select(-meter_category)
 
-# Filter to keep only the row with the latest `date_installed` for each `record_id` in df_sup
-  # This is because there are multiple differing values for the same `record_id`
-df_sup_latest <- df_sup %>%
-  group_by(record_id) %>%
-  slice_max(install_date) %>%
-  ungroup()
+# # Filter to keep only the row with the latest `date_installed` for each `record_id` in df_sup
+#   # This is because there are multiple differing values for the same `record_id`
+# df_sup <- df_sup %>%
+#   group_by(record_id) %>%
+#   slice_max(install_date) %>%
+#   ungroup()
 
 
 # Perform a full join, keeping all rows and columns
-df_combined <- full_join(df_sup, df_mop, by = "record_id")
+df_combined <- full_join(df_sup, df_mop, by = "record_id") # join sup+mop
+# df_combined <- df_sup %>% # join sup+mop+sme
+#   full_join(df_mop, by = "record_id") %>%
+#   full_join(df_sme, by = "record_id")
 
 
-# the below joins on any duplicated (.x and .y) columns where .y
-  # has been filled with NA, and so keeps the non-NA value.
-# Get the names of duplicated columns without the suffixes
-dup_cols <- intersect(names(df_sup), names(df_mop))
-dup_cols <- setdiff(dup_cols, "id")  # Exclude key columns  
-# Combine all duplicated columns
-clean_df <- df_combined %>%
-  mutate(across(
-    all_of(dup_cols),
-    ~ coalesce(.x, get(paste0(cur_column(), ".y"))),
-    .names = "{.col}"
-  )) %>%
-  select(-ends_with(".x"), -ends_with(".y"))
+
+# # the below merges duplicated columns and keeps the first one
+# df_cleaned <- df_combined %>%
+#   mutate(
+#     mpan = coalesce(mpan.x, mpan.y),
+#     msn = coalesce(msn.x, msn.y),
+#     meter_type = coalesce(meter_type.x, meter_type.y),
+#     install_date = coalesce(install_date.x, install_date.y),
+#     outstation_type = coalesce(outstation_type.x, outstation_type.y),
+#     communication_method = coalesce(communication_method.x, communication_method.y),
+#     communication_address = coalesce(communication_address.x, communication_address.y)
+#   ) %>%
+#   select(-ends_with(".x"), -ends_with(".y"))  # Remove the .x and .y columns
+
+
+
+
+# Create the 'LTNR' column in 'df_combined'
+df_combined$LTNR <- ifelse(
+  df_combined$mpan.x %in% df_ltnr$Service_Point | 
+    df_combined$mpan.y %in% df_ltnr$Service_Point, 
+  "Y", "N"
+)
+
+
+
 
 write_csv(df_combined, file.path(base_path, paste0("exported-data/df_combined_", today_date, ".csv")))
-write_csv(clean_df, file.path(base_path, paste0("exported-data/clean_df_", today_date, ".csv")))
+# write_csv(df_cleaned, file.path(base_path, paste0("exported-data/clean_df_", today_date, ".csv")))
+
+
+
+
+
+
+
+
+
+
+
 
 
 
