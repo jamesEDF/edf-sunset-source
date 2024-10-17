@@ -1,7 +1,7 @@
 WITH live_on_supply AS ( -- will only include IMPORT, need to get EXPORT
 SELECT
   sp.MPANCORE, 
-  cus.CUSTOMERNAME_CURRENT AS CUSTOMERNAME,
+  cus.CUSTOMERNAME_CURRENT AS CUSTOMERNAME_CURRENT,
   cus.CUSTOMERID,
   s.SITEID,
   acc.ACCOUNTID,
@@ -16,7 +16,24 @@ SELECT
   sa.SERVICEAGREEMENTSTATUS AS SASTATUS,
   saeff.RATESCHEDULEDESC AS SARATESCHEDULE,
   sp.MARKETSEGMENT_CURRENT AS MARKETSEGMENT,
-  sp.SUPPLIERKEY
+  sp.SUPPLIERKEY,
+  sp.STANDARDSETTLEMENTCONFIGURATIONKEY_CURRENT,
+  sp.INDUSTRYSTANDARDSETTLEMENTCONFIGURATION,
+  s.ADDRESSLINE1 AS SITE_ADDRESSLINE1,
+  s.ADDRESSLINE2 AS SITE_ADDRESSLINE2,
+  s.ADDRESSLINE3 AS SITE_ADDRESSLINE3,
+  s.ADDRESSLINE4 AS SITE_ADDRESSLINE4,
+  s.ADDRESS AS SITE_ADDRESS,
+  s.CITY AS SITE_CITY,
+  s.COUNTY AS SITE_COUNTY,
+  s.POSTCODEOUT AS SITE_POSTCODEOUT,
+  s.POSTCODEIN AS SITE_POSTCODEIN,
+  
+  sp.PROFILECLASSKEY_CURRENT AS PROFILECLASSKEY_CURRENT,
+  sp.INDUSTRYPROFILECLASS AS INDUSTRYPROFILECLASS,
+  sp.INDUSTRYMETEROPERATOR AS INDUSTRYMETEROPERATOR,
+  sp.METEROPERATORKEY AS METEROPERATORKEY,
+
 FROM FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.FACTSERVICEPOINT fsp
 JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMSERVICEPOINT sp ON fsp.SK_SERVICEPOINTID = sp.SK_SERVICEPOINTID
 JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMCUSTOMER cus ON fsp.SK_CUSTOMERID = cus.SK_CUSTOMERID
@@ -45,7 +62,24 @@ GROUP BY
   sa.SERVICEAGREEMENTSTATUS,
   saeff.RATESCHEDULEDESC,
   sp.MARKETSEGMENT_CURRENT,
-  sp.SUPPLIERKEY
+  sp.SUPPLIERKEY,
+  sp.STANDARDSETTLEMENTCONFIGURATIONKEY_CURRENT,
+  sp.INDUSTRYSTANDARDSETTLEMENTCONFIGURATION,
+  s.ADDRESSLINE1,
+  s.ADDRESSLINE2,
+  s.ADDRESSLINE3,
+  s.ADDRESSLINE4,
+  s.ADDRESS,
+  s.CITY,
+  s.COUNTY,
+  s.POSTCODEOUT,
+  s.POSTCODEIN,
+
+  sp.PROFILECLASSKEY_CURRENT,
+  sp.INDUSTRYPROFILECLASS,
+  sp.INDUSTRYMETEROPERATOR,
+  sp.METEROPERATORKEY
+
 ),
  
 installed_meters AS (
@@ -138,21 +172,42 @@ GROUP BY mpan
  
 main as (
 SELECT DISTINCT
-  CONCAT(los.mpancore,' - ',im.msn) AS record_id,
+  CONCAT(im.msn,' - ',los.mpancore) AS record_id,
   los.mpancore AS mpan,
-  COUNT(DISTINCT im.msn) OVER(PARTITION BY los.mpancore) AS mtr_count,
+  -- COUNT(DISTINCT im.msn) OVER(PARTITION BY los.mpancore) AS mtr_count,
   im.msn AS msn,
   mt.char_val AS meter_type,
   TO_DATE(im.date_installed) AS date_installed,
   im.OutstationType AS outstation_type, --fine
   cm.char_val AS communication_method,
   ca.adhoc_char_val AS communication_address,
+  los.SAIMPORTEXPORTFLAG AS import_export_flag,
   --im.d1_device_id IS NOT NULL AS meter_installed,
   --ecoes.meter_serial ecoes_msn,
   --ecoes.meter_install_date ecoes_installed,
   --CASE WHEN ecoes_installed IS NULL THEN NULL WHEN date_installed = ecoes_installed THEN 'TRUE' ELSE 'FALSE' END AS install_match,
   --ec.cnt AS ecoes_mtr_count,
   --mtr_count - ecoes_mtr_count AS diff
+  los.STANDARDSETTLEMENTCONFIGURATIONKEY_CURRENT AS ssc_current,
+  los.INDUSTRYSTANDARDSETTLEMENTCONFIGURATION AS ssc_industry,
+  los.SITE_ADDRESSLINE1 as street1,
+  los.SITE_ADDRESSLINE2 as street2,
+  los.SITE_ADDRESSLINE3 as street3,
+  los.SITE_ADDRESSLINE4 as street4,
+  los.SITE_CITY as city,
+  los.SITE_COUNTY as county,
+  los.SITE_POSTCODEOUT as postcode_out,
+  los.SITE_POSTCODEIN as postcode_in,
+  CONCAT(los.SITE_POSTCODEOUT, ' ', los.SITE_POSTCODEIN) AS postcode,
+  los.SITE_ADDRESS as site_address,
+  los.CUSTOMERNAME_CURRENT as customer_name,
+  
+  los.PROFILECLASSKEY_CURRENT as profile_class,
+  los.INDUSTRYPROFILECLASS as profile_class_industry,
+  los.METEROPERATORKEY as meter_operator,
+  los.INDUSTRYMETEROPERATOR as meter_operator_industry,
+
+
 FROM live_on_supply los
 INNER JOIN installed_meters im ON im.MPAN = los.mpancore --CHANGED FROM LEFT TO ONLY INCLUDE INSTALLED METERS FOR EBS SUPPLY
 LEFT JOIN com_addr ca ON ca.d1_device_id = im.d1_device_id
@@ -162,4 +217,4 @@ LEFT JOIN com_method cm ON cm.d1_device_id = im.d1_device_id)
 --LEFT JOIN flk_dub_db_datalake_prd.dim_consumption_iac.v_dimservicepoint vdsp ON vdsp.SITEID = los.siteid
 --LEFT JOIN ecoes_count ec ON ec.mpan = los.mpancore)
  
-select distinct * from main ORDER BY record_id
+select distinct * from main ORDER BY msn
