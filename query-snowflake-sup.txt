@@ -1,4 +1,4 @@
-WITH live_on_supply AS ( -- will only include IMPORT, need to get EXPORT
+WITH live_on_supply AS (
 SELECT
   sp.MPANCORE, 
   cus.CUSTOMERNAME_CURRENT AS CUSTOMERNAME_CURRENT,
@@ -43,7 +43,7 @@ JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMSERVICEAGREEMENT sa ON fsp.SK_SE
 JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMCONTRACT con ON con.SK_CONTRACTID = fsp.SK_CONTRACTID
 JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMSERVICEAGREEMENTEFFECTIVEDETAIL saeff ON saeff.SK_SERVICEAGREEMENTEFFECTIVEDETAILID = fsp.SK_SERVICEAGREEMENTEFFECTIVEDETAILID
 WHERE TRUE
-  AND sp.SUPPLIERKEY IN ('LOND', 'SEEB', 'SWEB') --ask Andy/Charlie if import is the only criteria that needs to be removed to get full portfolio for EBS to include export, and why supplier key is used alongside service agreement
+  AND sp.SUPPLIERKEY IN ('LOND', 'SEEB', 'SWEB')
   --AND sa.IMPORTEXPORTFLAG = 'Import'
 GROUP BY
   sp.MPANCORE,
@@ -169,10 +169,39 @@ FROM ecoes
 WHERE meter_serial IS NOT NULL 
 GROUP BY mpan
 ),
+
+eac_data AS (
+    SELECT
+        eac1.MPANCORE,
+        eac1.ACCOUNTID,
+        SUM(eac1.METERINGSYSTEMEACKWH) AS METERINGSYSTEMEACKWH,
+        eac1.DATEVALUE
+    FROM (
+        SELECT
+            sp.MPANCORE,
+            a.ACCOUNTID,
+            MAX(dd.DATEVALUE) OVER (PARTITION BY sp.MPANCORE, a.ACCOUNTID) AS MAXDATE,
+            dd.DATEVALUE,
+            fmse.METERINGSYSTEMEACKWH
+        FROM
+            FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.FACTMETERINGSYSTEMEAC fmse
+            JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMSERVICEPOINT sp ON sp.SK_SERVICEPOINTID = fmse.SK_SERVICEPOINTID
+            JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMACCOUNT a ON a.SK_ACCOUNTID = fmse.SK_ACCOUNTID
+            JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMDATE dd ON dd.SK_DATEID = fmse.SK_EFFECTIVEFROMDATEID
+            JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMEACDETAIL ed ON ed.SK_EACDETAILID = fmse.SK_EACDETAILID
+            AND ed.ISCURRENTEAC = 'Yes'
+    ) eac1
+    WHERE
+        eac1.DATEVALUE = eac1.MAXDATE
+    GROUP BY
+        eac1.MPANCORE,
+        eac1.ACCOUNTID,
+        eac1.DATEVALUE
+),
  
 main as (
 SELECT DISTINCT
-  CONCAT(im.msn,' - ',los.mpancore) AS record_id,
+  --CONCAT(im.msn,' - ',los.mpancore) AS record_id,
   los.mpancore AS mpan,
   -- COUNT(DISTINCT im.msn) OVER(PARTITION BY los.mpancore) AS mtr_count,
   im.msn AS msn,
@@ -188,33 +217,36 @@ SELECT DISTINCT
   --CASE WHEN ecoes_installed IS NULL THEN NULL WHEN date_installed = ecoes_installed THEN 'TRUE' ELSE 'FALSE' END AS install_match,
   --ec.cnt AS ecoes_mtr_count,
   --mtr_count - ecoes_mtr_count AS diff
-  los.STANDARDSETTLEMENTCONFIGURATIONKEY_CURRENT AS ssc_current,
-  los.INDUSTRYSTANDARDSETTLEMENTCONFIGURATION AS ssc_industry,
+  los.STANDARDSETTLEMENTCONFIGURATIONKEY_CURRENT AS ssc,
+  --los.INDUSTRYSTANDARDSETTLEMENTCONFIGURATION AS ssc_industry,
   los.SITE_ADDRESSLINE1 as street1,
   los.SITE_ADDRESSLINE2 as street2,
   los.SITE_ADDRESSLINE3 as street3,
   los.SITE_ADDRESSLINE4 as street4,
   los.SITE_CITY as city,
   los.SITE_COUNTY as county,
-  los.SITE_POSTCODEOUT as postcode_out,
-  los.SITE_POSTCODEIN as postcode_in,
-  CONCAT(los.SITE_POSTCODEOUT, ' ', los.SITE_POSTCODEIN) AS postcode,
+  TRIM(los.SITE_POSTCODEOUT) as postcode_out,
+  TRIM(los.SITE_POSTCODEIN) as postcode_in,
+  CONCAT(TRIM(los.SITE_POSTCODEOUT), ' ', TRIM(los.SITE_POSTCODEIN)) AS postcode,
   los.SITE_ADDRESS as site_address,
   los.CUSTOMERNAME_CURRENT as customer_name,
   
   los.PROFILECLASSKEY_CURRENT as profile_class,
-  los.INDUSTRYPROFILECLASS as profile_class_industry,
+  --los.INDUSTRYPROFILECLASS as profile_class_industry,
   los.METEROPERATORKEY as meter_operator,
-  los.INDUSTRYMETEROPERATOR as meter_operator_industry,
-
+  --los.INDUSTRYMETEROPERATOR as meter_operator_industry,
+  
+  eac_data.METERINGSYSTEMEACKWH as eac,
+  eac_data.DATEVALUE as eac_date,
 
 FROM live_on_supply los
 INNER JOIN installed_meters im ON im.MPAN = los.mpancore --CHANGED FROM LEFT TO ONLY INCLUDE INSTALLED METERS FOR EBS SUPPLY
 LEFT JOIN com_addr ca ON ca.d1_device_id = im.d1_device_id
 LEFT JOIN meter_type mt ON mt.d1_device_id = im.d1_device_id
-LEFT JOIN com_method cm ON cm.d1_device_id = im.d1_device_id)
+LEFT JOIN com_method cm ON cm.d1_device_id = im.d1_device_id
 --LEFT JOIN Ecoes ON Ecoes.mpan = los.mpancore AND Ecoes.meter_serial = im.msn
 --LEFT JOIN flk_dub_db_datalake_prd.dim_consumption_iac.v_dimservicepoint vdsp ON vdsp.SITEID = los.siteid
 --LEFT JOIN ecoes_count ec ON ec.mpan = los.mpancore)
+LEFT JOIN eac_data ON eac_data.MPANCORE = los.mpancore AND eac_data.ACCOUNTID = los.ACCOUNTID)
  
 select distinct * from main ORDER BY msn
