@@ -7,7 +7,7 @@ library(data.table)
 # Store the repeated file path in a variable
 base_path <- "C:/Users/dyer07j/Desktop/Coding/sunset_github REPO/edf-sunset-source/"
 
-# # the below is commented out to save on load times and £cost of Snowflake
+# # the below is commented out to save on load times and £cost of Snowflake.
 # # Read entire query into a single string variable
 # sqlquery_sup <- read_file(file.path(base_path, "query-snowflake-sup.txt"))
 # sqlquery_mop <- read_file(file.path(base_path, "query-snowflake-mop.txt"))
@@ -28,7 +28,7 @@ df_sup <- read_csv(file.path(base_path, "exported-data/df_sup_exported.csv"),
 
 df_mop <- read_csv(file.path(base_path, "exported-data/df_mop_exported.csv"), 
                    col_types = cols(
-                     mpan = col_character(),  # Define specific columns
+                     mpan = col_character(),
                      mop_start = col_date(format = "%Y-%m-%d"),
                      mop_end = col_date(format = "%Y-%m-%d"),
                      supplier_start = col_date(format = "%Y-%m-%d"),
@@ -58,6 +58,7 @@ df_rts_ssc_codes <- read_csv(file.path(base_path, "external-data", "RTS SSC Code
 
 # DROP COLUMNS
 df_mop <- df_mop %>% select(-meter_category)
+df_sup <- df_sup %>% select(-postcode_in)
 
 # ADD COLUMNS
 df_mop <- df_mop %>%
@@ -90,6 +91,11 @@ df_combined <- df_combined %>%
     date_installed.y = as.Date(date_installed.y)
   )
 
+# ADDING HELPER COLUMN TO COUNT DUPLICATE record_id VALUES
+df_combined <- df_combined %>%
+  mutate(meter_count = ave(record_id, record_id, FUN = length)) %>%
+  select(1, meter_count, everything())  # Move meter_count to the second position
+
 
 
 # List of columns to process
@@ -112,9 +118,12 @@ columns_to_merge <- c(
   "eac",
   "profile_class",
   "meter_operator",
-  "date_installed"
+  "date_installed",
+  "supplier"
 )
 
+# the below looks at df_combine columns that have duplicates (.x & .y suffixes) and handles them 
+# best suited to the individual parameter.
 
 for (col in columns_to_merge) {
   if (col == "date_installed") {
@@ -179,7 +188,7 @@ for (col in columns_to_merge) {
 
 
 # This counts and prints the number of mismatch values between columns .x and 
-# .y for each parameter in columns_to_merge
+# .y for each parameter in columns_to_merge - used for diagnosis.
 
 # Initialize an empty list to store mismatch counts
 mismatch_counts <- list()
@@ -206,16 +215,16 @@ print(mismatch_report)
 
 
 
-# Removes the .x, .y, and _mismatch columns, leaving just the chosen column
+# Removes the .x, .y, and _mismatch columns, leaving just the chosen column (as detailed in large logic code up above)
 df_combined <- df_combined %>% 
   select(-ends_with(".x"), -ends_with(".y"), -ends_with("_mismatch"))
 
 
- # Ensuring columns are in correct format
+ # ENSURE COLUMNS ARE IN CORRECT FORMAT
 df_combined$ssc <- as.numeric(df_combined$ssc) # Convert ssc to numeric (removes leading zeros)
 
 # Create the 'LTNR' column in 'df_combined'
-df_combined$LTNR <- ifelse(df_combined$mpan %in% df_ltnr$Service_Point, "Y", "N")
+df_combined$ltnr_flag <- ifelse(df_combined$mpan %in% df_ltnr$Service_Point, "Y", "N")
 # Create the 'rts_flag' column in df_combined
 df_combined$rts_flag <- ifelse(df_combined$ssc %in% df_rts_ssc_codes$SSC_Id, 'Y', 'N')
 
@@ -226,16 +235,31 @@ write_csv(df_combined, file.path(base_path, "exported-data/df_combined_exported.
 
 
 
+# SPLITTING DF INTO DUPLICATE SUBSETS (TO EVENTUALLY RESOLVE DUPLICATES)
+
+df_combined_green <- subset(df_combined, meter_count == 1)
+df_combined_amber <- subset(df_combined, meter_count == 2)
+df_combined_red <- subset(df_combined, meter_count > 2)
+
+write_csv(df_combined_green, file.path(base_path, "exported-data/df_combined_green.csv"))
+write_csv(df_combined_amber, file.path(base_path, "exported-data/df_combined_amber.csv"))
+write_csv(df_combined_red, file.path(base_path, "exported-data/df_combined_red.csv"))
 
 
 
-# reduced version of df_combined, exporting for Scaling Partners
+
+
+
+
+# REDUCED VIEW (I.E., SINGLE VIEW OF DEMAND) EXPORT FOR SCALING PARTNERS
+
 # List of columns to remove
 columns_to_remove <- c(
+  "record_id", "meter_count",
   "ssc_industry", "county", "postcode_in", "site_address",
   "profile_class_industry", "meter_operator_industry", "eac_date",
   "mop_start", "mop_end", "supplier_tier", "edf_system", "market",
-  "supplier", "supplier_start", "supplier_end", "dc_service_type",
+  "supplier_start", "supplier_end", "dc_service_type",
   "dc", "dc_start", "dc_end", "direct_contract_flag", "open_fault",
   "open_service_order", "commission_status", "commission_status_date",
   "energised_status", "energised_status_date", "phase",
@@ -254,11 +278,11 @@ columns_to_remove <- c(
   "street4", "city", "postcode_out", "postcode"
 )
 
-# Remove the specified columns
-df_combined <- df_combined[, !names(df_combined) %in% columns_to_remove]
+# Remove specified columns
+df_single_view <- df_combined_green[, !names(df_combined) %in% columns_to_remove]
 
 # Export the modified dataframe to a CSV file
-write_csv(df_combined, file.path(base_path, "exported-data/df_combined_reduced.csv"))
+write_csv(df_single_view, file.path(base_path, "exported-data/single_view.csv"))
 
 
 

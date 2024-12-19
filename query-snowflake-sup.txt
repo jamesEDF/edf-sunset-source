@@ -201,9 +201,9 @@ eac_data AS (
  
 main as (
 SELECT DISTINCT
-  --CONCAT(im.msn,' - ',los.mpancore) AS record_id,
+  CONCAT(im.msn,' - ',los.mpancore) AS record_id,
   los.mpancore AS mpan,
-  -- COUNT(DISTINCT im.msn) OVER(PARTITION BY los.mpancore) AS mtr_count,
+  --COUNT(DISTINCT im.msn) OVER(PARTITION BY los.mpancore) AS mtr_count,
   im.msn AS msn,
   mt.char_val AS meter_type,
   TO_DATE(im.date_installed) AS date_installed,
@@ -238,6 +238,8 @@ SELECT DISTINCT
   
   eac_data.METERINGSYSTEMEACKWH as eac,
   eac_data.DATEVALUE as eac_date,
+  los.SUPPLIERKEY AS supplier,
+
 
 FROM live_on_supply los
 INNER JOIN installed_meters im ON im.MPAN = los.mpancore --CHANGED FROM LEFT TO ONLY INCLUDE INSTALLED METERS FOR EBS SUPPLY

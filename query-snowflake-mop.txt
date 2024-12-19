@@ -454,7 +454,7 @@ cte_krakken AS (
 FROM flk_dub_db_datalake_prd.prod_output_kraken_cnp.cnp_portfolio)
     
 SELECT DISTINCT -- based off MOP Portfolio Health Code version 08052024 v1
-    -- cte_installed_meters.recordid AS record_id,
+    cte_installed_meters.recordid AS record_id,
     cte_installed_meters.mpan,
     cte_installed_meters.serge AS msn,
     CASE
