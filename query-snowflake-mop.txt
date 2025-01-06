@@ -517,8 +517,8 @@ SELECT DISTINCT -- based off MOP Portfolio Health Code version 08052024 v1
     cte_installed_meters.zzaddress3 AS street3,
     cte_installed_meters.zzaddress4 AS street4,
     cte_installed_meters.zzaddress5 AS street5,
-    cte_installed_meters.zzaddr_district AS district,
-    cte_installed_meters.zzaddr_city AS city,
+    cte_installed_meters.zzaddr_district AS street6,
+    cte_installed_meters.zzaddr_city AS street7,
     cte_installed_meters.zzaddr_postcode AS postcode,
     cte_installed_meters.zzaddr_region AS region,
     cte_installed_meters.equnr AS meter_qualifier,
@@ -621,4 +621,4 @@ FROM cte_installed_meters
         AND cte_edf_mop_appointments_all.service_end >= cte_installed_meters.einbdat
 WHERE cte_edf_active_mop.serviceid IS NOT NULL
     AND (cte_installed_meters.eqart IN ('H', 'RCAMY', 'RCAMR', 'NCAMR') OR cte_appointed_supplier.serviceid <> 'EDFE')
-     
+    AND c2m_sp.meteroperatorkey = 'LOND'

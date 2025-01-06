@@ -9,8 +9,6 @@ base_path <- "C:/Users/dyer07j/Desktop/Coding/sunset_github REPO/edf-sunset-sour
 
 
 df_addr_mop <- read_csv(file.path(base_path, "address_clean_data_MOP_test.csv"))
-df_addr_sup <- read_csv(file.path(base_path, "address_clean_data_SUP_test.csv"))
-df_addr_eco <- read_csv(file.path(base_path, "address_clean_data_ECOES_test.csv"))
 
 # function that shows blank-to-populated cells ratio
 print_column_stats <- function(df) {
@@ -170,7 +168,10 @@ clean_and_combine <- function(df, col1, col2) {
     "^Kiosk$",                  # "Kiosk"
     "^Fire Station$",           # "Fire Station"
     "^Llds Supply$",            # "Llds Supply"
-    "^Workshop$"                # "Workshop"
+    "^Workshop$",                # "Workshop"
+    "^-\\d+$",              # "-" followed by a number (e.g., "-195")
+    "^\\d+ - \\d+[A-Za-z]$",# number, space, dash, space, number+letter (e.g., "24 - 25A")
+    "^First Floor$"         # "First Floor"
     
   )
   
@@ -244,10 +245,10 @@ clean_and_combine_all_streets <- function(df, prefix = "street") {
 
 # Apply to your dataset
 df_addr_mop_combined <- clean_and_combine_all_streets(df_addr_mop_2)
+df_addr_mop_combined_titleCase <- df_addr_mop_combined
 
-
-# Apply title case to all cells in the data frame
-street_cols <- grep("^street\\d+$", names(df), value = TRUE)
+# Apply title case to all street cells in the data frame
+street_cols <- grep("^street\\d+$", names(df_addr_mop_combined_titleCase), value = TRUE)
 df_addr_mop_combined_titleCase[street_cols] <- lapply(df_addr_mop_combined_titleCase[street_cols], function(col) {
   if (is.character(col)) {
     str_to_title(col)
@@ -261,6 +262,72 @@ df_addr_mop_combined_titleCase[street_cols] <- lapply(df_addr_mop_combined_title
 print_column_stats(df_addr_mop)
 print_column_stats(df_addr_mop_combined_titleCase)
 
-write_csv(df_addr_mop_combined_titleCase, file.path(base_path, "address_clean_data_MOP_test_COMBINED.csv"))
+# write_csv(df_addr_mop_combined_titleCase, file.path(base_path, "address_clean_data_MOP_test_COMBINED.csv"))
+
+
+
+
+# After left-shifting and combining, we combine any leftover cells (after street5) into street5
+max_street_cols <- 5
+
+# Identify all street columns currently in the dataframe
+street_cols <- grep("^street\\d+$", names(df_addr_mop_combined_titleCase), value = TRUE)
+
+if (length(street_cols) > max_street_cols) {
+  
+  # Columns beyond street5
+  extra_street_cols <- street_cols[(max_street_cols+1):length(street_cols)]
+  
+  # Combine extra street columns into street5
+  # We'll do this row by row
+  df_addr_mop_combined_titleCase[[street_cols[max_street_cols]]] <- apply(
+    df_addr_mop_combined_titleCase[, c(street_cols[max_street_cols], extra_street_cols)], 
+    1, 
+    function(row) {
+      # The first element is the existing street5 value
+      main_val <- row[1]
+      # The rest are the extra columns
+      extras <- row[-1]
+      
+      # Filter out NAs and empty strings
+      extras <- extras[!is.na(extras) & extras != ""]
+      
+      # If there are extras to add
+      if (length(extras) > 0) {
+        if (!is.na(main_val) && main_val != "") {
+          # If street5 is not empty, append with a comma and space
+          return(paste(c(main_val, extras), collapse = ", "))
+        } else {
+          # If street5 is empty, just use the extras
+          return(paste(extras, collapse = ", "))
+        }
+      } else {
+        # No extras, return the original street5 value
+        return(main_val)
+      }
+    }
+  )
+  
+  # Remove the extra street columns
+  df_addr_mop_combined_titleCase <- df_addr_mop_combined_titleCase[, !(names(df_addr_mop_combined_titleCase) %in% extra_street_cols)]
+}
+
+# write_csv(df_addr_mop_combined_titleCase, file.path(base_path, "address_clean_data_MOP_test_COMBINED_REDUCED.csv"))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
