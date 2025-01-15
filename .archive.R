@@ -1,3 +1,8 @@
+# THIS FILE IS FILLED WITH DIFFERENT PARTS OF CODE THAT ARE NO LONGER NEEDED AND
+# _SHOULD_ BE SEPERATED BY SECTION HEADERS
+
+
+
 # cleaning addresses TEST
 library(stringr)
 library(readr)
@@ -177,6 +182,31 @@ df_addr_mop_combined_2 <- clean_and_combine_all_streets(df_addr_mop_combined)
 df_addr_mop_4 <- data.frame(lapply(df_addr_mop_3, function(x) if (is.character(x)) str_to_title(x) else x))
 
 
+
+
+############################################################################
+# SPLITTING DF INTO DUPLICATE SUBSETS (TO EVENTUALLY RESOLVE DUPLICATES)
+############################################################################
+
+# this came after adding external data into new columns, and before creating reduced view.
+
+# df_combined_green <- df_combined %>%
+#   group_by(record_id) %>%
+#   mutate(impexp_flag_count = n_distinct(import_export_flag)) %>%
+#   ungroup() %>%
+#   filter(meter_count == 1 | (meter_count == 2 & impexp_flag_count == 2))
+# df_combined_amber <- df_combined %>%
+#   group_by(record_id) %>%
+#   mutate(impexp_flag_count = n_distinct(import_export_flag)) %>%
+#   ungroup() %>%
+#   filter(meter_count == 2 & impexp_flag_count != 2)
+# df_combined_red <- df_combined %>%
+#   filter(meter_count > 2)
+
+
+# write_csv(df_combined_green, file.path(base_path, "exported-data/df_combined_green.csv"))
+# write_csv(df_combined_amber, file.path(base_path, "exported-data/df_combined_amber.csv"))
+# write_csv(df_combined_red, file.path(base_path, "exported-data/df_combined_red.csv"))
 
 
 
