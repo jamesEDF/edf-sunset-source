@@ -5,3 +5,6 @@
 
 exported-data/
 
+# Ignore .xlsx and .csv files in external-data/ and all its subdirectories
+external-data/**/*.xlsx
+external-data/**/*.csv
