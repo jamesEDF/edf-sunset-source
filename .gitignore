@@ -3,6 +3,5 @@
 .RData
 .Ruserdata
 
-external-data/
 exported-data/
-snowflake-data/
+

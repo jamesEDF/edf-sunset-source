@@ -1,0 +1,126 @@
+SELECT DISTINCT
+    -- 1) Your existing MPAN_LOOKUP logic:
+    CASE
+        WHEN REGEXP_SUBSTR(J.CONTACT_REFERENCE, 'MSID\\s+\\d+') IS NOT NULL 
+            THEN REGEXP_SUBSTR(J.CONTACT_REFERENCE, 'MSID\\s+\\d+')
+        WHEN REGEXP_SUBSTR(J.CONTACT_NAME, 'MSID\\s+\\d+') IS NOT NULL 
+            THEN REGEXP_SUBSTR(J.CONTACT_NAME, 'MSID\\s+\\d+')
+        WHEN REGEXP_SUBSTR(J.CONTACT_REFERENCE, '[0-9]{13}') IS NULL
+             AND REGEXP_SUBSTR(J.CONTACT_NAME, '[0-9]{13}') IS NULL 
+            THEN J.CONTACT_REFERENCE
+        WHEN REGEXP_SUBSTR(J.CONTACT_REFERENCE, '[0-9]{13}') IS NOT NULL 
+            THEN REGEXP_SUBSTR(J.CONTACT_REFERENCE, '[0-9]{13}')
+        ELSE 
+            REGEXP_SUBSTR(J.CONTACT_NAME, '[0-9]{13}')
+    END AS MPAN_LOOKUP,
+
+    JMSN.VALUE AS MSN,
+    MPAN_LOOKUP || ' - ' || MSN AS RECORD_ID,
+    J.STATUS_COMMENT,
+    J.TYPE_NAME,
+    TO_DATE(LEFT(TO_VARCHAR(J.ACTUAL_END_AT),10)) AS COMPLETED_DATE,
+    
+    -- The below basically combines all signal_strength columns to one, and then converts any numeric cells
+    -- to one of the four new signal strength options.
+    CASE 
+        -- a) If already one of the four named strings, keep as is
+        WHEN COALESCE(JSSRSSI.ANSWER_TEXT,
+                      JSSCSQ.ANSWER_TEXT,
+                      JSS.ANSWER_TEXT,
+                      JSSPSTN.ANSWER_TEXT)
+             IN (
+                'Excellent Signal (~51dBm to ~ 73dBm or 31 to 20 CSQ)',
+                'Good Signal (~75dBm to ~ 83dBm or 19 to 15 CSQ)',
+                'Workable Signal (~85dBm to ~ 93dBm or 14 to 10 CSQ)',
+                'Poor Signal (~95dBm to ~113dBm or 9 to 0 CSQ)'
+             )
+        THEN COALESCE(JSSRSSI.ANSWER_TEXT,
+                      JSSCSQ.ANSWER_TEXT,
+                      JSS.ANSWER_TEXT,
+                      JSSPSTN.ANSWER_TEXT)
+        
+        -- b) If the combined value is NULL or empty, just keep it (NULL/blank stays NULL/blank)
+        WHEN COALESCE(JSSRSSI.ANSWER_TEXT,
+                      JSSCSQ.ANSWER_TEXT,
+                      JSS.ANSWER_TEXT,
+                      JSSPSTN.ANSWER_TEXT) IS NULL
+             OR TRIM(COALESCE(JSSRSSI.ANSWER_TEXT,
+                              JSSCSQ.ANSWER_TEXT,
+                              JSS.ANSWER_TEXT,
+                              JSSPSTN.ANSWER_TEXT)) = ''
+        THEN COALESCE(JSSRSSI.ANSWER_TEXT,
+                      JSSCSQ.ANSWER_TEXT,
+                      JSS.ANSWER_TEXT,
+                      JSSPSTN.ANSWER_TEXT)
+        
+        -- c) Otherwise, try casting to a number and map to a category
+        ELSE
+            CASE
+                WHEN TRY_TO_NUMBER(COALESCE(JSSRSSI.ANSWER_TEXT,
+                                            JSSCSQ.ANSWER_TEXT,
+                                            JSS.ANSWER_TEXT,
+                                            JSSPSTN.ANSWER_TEXT)) IS NOT NULL 
+                THEN
+                    CASE
+                        WHEN TRY_TO_NUMBER(COALESCE(JSSRSSI.ANSWER_TEXT,
+                                                    JSSCSQ.ANSWER_TEXT,
+                                                    JSS.ANSWER_TEXT,
+                                                    JSSPSTN.ANSWER_TEXT)) >= 20 
+                        THEN 'Excellent Signal (~51dBm to ~ 73dBm or 31 to 20 CSQ)'
+                        
+                        WHEN TRY_TO_NUMBER(COALESCE(JSSRSSI.ANSWER_TEXT,
+                                                    JSSCSQ.ANSWER_TEXT,
+                                                    JSS.ANSWER_TEXT,
+                                                    JSSPSTN.ANSWER_TEXT)) BETWEEN 15 AND 19
+                        THEN 'Good Signal (~75dBm to ~ 83dBm or 19 to 15 CSQ)'
+                        
+                        WHEN TRY_TO_NUMBER(COALESCE(JSSRSSI.ANSWER_TEXT,
+                                                    JSSCSQ.ANSWER_TEXT,
+                                                    JSS.ANSWER_TEXT,
+                                                    JSSPSTN.ANSWER_TEXT)) BETWEEN 10 AND 14
+                        THEN 'Workable Signal (~85dBm to ~ 93dBm or 14 to 10 CSQ)'
+                        
+                        WHEN TRY_TO_NUMBER(COALESCE(JSSRSSI.ANSWER_TEXT,
+                                                    JSSCSQ.ANSWER_TEXT,
+                                                    JSS.ANSWER_TEXT,
+                                                    JSSPSTN.ANSWER_TEXT)) BETWEEN 0 AND 9
+                        THEN 'Poor Signal (~95dBm to ~113dBm or 9 to 0 CSQ)'
+                        
+                        ELSE
+                            -- If a number is <0 or something else, keep the original text or handle differently:
+                            COALESCE(JSSRSSI.ANSWER_TEXT,
+                                     JSSCSQ.ANSWER_TEXT,
+                                     JSS.ANSWER_TEXT,
+                                     JSSPSTN.ANSWER_TEXT)
+                    END
+                ELSE
+                    -- If we can't parse it as a number (unexpected text), keep the original
+                    COALESCE(JSSRSSI.ANSWER_TEXT,
+                             JSSCSQ.ANSWER_TEXT,
+                             JSS.ANSWER_TEXT,
+                             JSSPSTN.ANSWER_TEXT)
+            END
+    END AS SIGNAL_STRENGTH,
+
+    ROW_NUMBER() OVER (
+        PARTITION BY RECORD_ID
+        ORDER BY COMPLETED_DATE DESC
+    ) AS rn
+
+FROM BIGCHANGE2175EDFENERGYLTD.BIGCHANGE_2175_EDF_ENERGY_LTD.JOBS_V1 AS J
+    LEFT JOIN BIGCHANGE2175EDFENERGYLTD.BIGCHANGE_2175_EDF_ENERGY_LTD.JOB_CUSTOM_FIELDS_V1 AS JTC
+           ON J.ID = JTC._JOB_ID AND JTC.LABEL = 'Job Type Code'
+    LEFT JOIN BIGCHANGE2175EDFENERGYLTD.BIGCHANGE_2175_EDF_ENERGY_LTD.JOB_CUSTOM_FIELDS_V1 AS JMSN
+           ON J.ID = JMSN._JOB_ID AND JMSN.LABEL = 'On Site MSN'
+    LEFT JOIN BIGCHANGE2175EDFENERGYLTD.BIGCHANGE_2175_EDF_ENERGY_LTD.JOB_WORKSHEET_ANSWERS_V1 AS JSS
+           ON J.ID = JSS._JOB_ID AND JSS.QUESTION_TEXT = 'Signal Strength'
+    LEFT JOIN BIGCHANGE2175EDFENERGYLTD.BIGCHANGE_2175_EDF_ENERGY_LTD.JOB_WORKSHEET_ANSWERS_V1 AS JSSCSQ
+           ON J.ID = JSSCSQ._JOB_ID AND JSSCSQ.QUESTION_TEXT = 'Signal Strength (CSQ)'
+    LEFT JOIN BIGCHANGE2175EDFENERGYLTD.BIGCHANGE_2175_EDF_ENERGY_LTD.JOB_WORKSHEET_ANSWERS_V1 AS JSSPSTN
+           ON J.ID = JSSPSTN._JOB_ID AND JSSPSTN.QUESTION_TEXT = 'Signal Strength PSTN (CSQ)'
+    LEFT JOIN BIGCHANGE2175EDFENERGYLTD.BIGCHANGE_2175_EDF_ENERGY_LTD.JOB_WORKSHEET_ANSWERS_V1 AS JSSRSSI
+           ON J.ID = JSSRSSI._JOB_ID AND JSSRSSI.QUESTION_TEXT = 'Signal strength (CSQ/RSSI)'
+    LEFT JOIN BIGCHANGE2175EDFENERGYLTD.BIGCHANGE_2175_EDF_ENERGY_LTD.JOB_WORKSHEET_ANSWERS_V1 AS SSIL
+           ON J.ID = SSIL._JOB_ID AND SSIL.QUESTION_TEXT = 'Signal strength in location'
+WHERE J.STATUS = 'Completed'
+QUALIFY rn = 1;

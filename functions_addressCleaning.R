@@ -1,7 +1,7 @@
 
 # complete function that does the whole processing in one step
 clean_address_data <- function(df,
-                               prefix = "street",
+                               prefix = "site_address_list_",
                                max_street_cols = 5,
                                bad_patterns = c("^\\.$", "^-+$", "^unknown$"),
                                patterns = c(
@@ -76,7 +76,9 @@ clean_address_data <- function(df,
                                  "^Workshop$",
                                  "^-\\d+$",
                                  "^\\d+ - \\d+[A-Za-z]$",
-                                 "^First Floor$"
+                                 "^First Floor$",
+                                 "^[A-Za-z]$"
+                                 
                                )) {
   # Required libraries
   require(dplyr)
@@ -122,8 +124,8 @@ clean_address_data <- function(df,
     df
   }
   
-  # Shift non-empty values to the left in "street" columns
-  shift_streets_left <- function(row, prefix = "street") {
+  # Shift non-empty values to the left in "site_address_list_" columns
+  shift_streets_left <- function(row, prefix = "site_address_list_") {
     street_cols <- grep(paste0("^", prefix, "\\d+$"), names(row))
     if (length(street_cols) == 0) {
       return(row)
@@ -181,11 +183,15 @@ clean_address_data <- function(df,
     # Apply shift once before starting
     df <- as.data.frame(t(apply(df, 1, shift_streets_left, prefix = prefix)))
     
+    
+    
     # Keep looping until all corrections are zero
     repeat {
       correction_counts <- integer(0)
       # Re-shift before each pass
       df <- as.data.frame(t(apply(df, 1, shift_streets_left, prefix = prefix)))
+      
+      
       
       # Loop through adjacent pairs
       for (i in seq_along(street_cols)[-length(street_cols)]) {

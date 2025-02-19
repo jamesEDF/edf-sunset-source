@@ -1,0 +1,170 @@
+with krkn as (
+    select distinct
+        mpxn as mpan,
+        market
+from flk_dub_db_datalake_prd.prod_output_kraken_cnp.cnp_portfolio
+),
+
+c2m as (
+    select distinct
+        "Service Point" as mpan,
+        upper("Customer Name") as ebs_energy_customer,
+        "Sales Segment" as ebs_energy_segment,
+        "Micro Indicator" as ebs_energy_micro_flag,
+        "Annualised Consumption (kWh)" as ebs_energy_eac,
+        "Meter Operator" as ebs_energy_mop
+    from flk_dub_db_datalake_prd.dim_consumption_iac."tbl_Portfolio_Live_Master"
+),
+
+jw as (
+    select distinct
+    case 
+    when regexp_substr(c.reference, 'MSID\\s+\\d+') is not null then regexp_substr(c.reference, 'MSID\\s+\\d+')
+    when regexp_substr(c.name, 'MSID\\s+\\d+') is not null then regexp_substr(c.name, 'MSID\\s+\\d+')
+    when regexp_substr(c.reference, '[0-9]{13}') is null and regexp_substr(c.name, '[0-9]{13}') is null then c.reference
+    when regexp_substr(c.reference, '[0-9]{13}') is not null then regexp_substr(c.reference, '[0-9]{13}')
+    else regexp_substr(c.name, '[0-9]{13}')
+    end as mpan,
+    cs.value as ebs_mop_contract_status,
+    bs.value as ebs_mop_billing_status,
+    upper(pc.parent_contact_name) as ebs_mop_customer
+    from bigchange2175edfenergyltd.bigchange_2175_edf_energy_ltd.contacts_v1 c
+    left join bigchange2175edfenergyltd.bigchange_2175_edf_energy_ltd.contacts_v1 pc on pc.id = c._parent_contact_id
+    inner join bigchange2175edfenergyltd.bigchange_2175_edf_energy_ltd.contact_custom_fields_v1 cs on cs._contact_id = c.id and cs.label = 'Contract Status' and cs.value in ('Accepted','Extended')
+    left join bigchange2175edfenergyltd.bigchange_2175_edf_energy_ltd.contact_custom_fields_v1 bs on bs._contact_id = c.id and bs.label = 'Billing Status'
+    where c.group_name = 'Site'
+)
+
+select distinct
+    --identifiers
+    concat(mpan.mpan,' - ',obj.serial_no) as record_id,
+    mpan.mpan,
+    obj.serial_no as msn,
+    case
+    when mpmd.m15_mtty = 'H' then 'HH'
+    when mpmd.m15_mtty in ('NCAMR','RCAMR','RCAMY') then 'AMR'
+    when mpmd.m15_mtty = 'N' then 'Legacy N'
+    when left(mpmd.m15_mtty,1) in ('S','1','2') then 'SMART'
+    else 'Other NHH' end as meter_category,
+
+    --comment
+    case when reg.serial_id is null then 'no register details'
+    when reg.serial_id is not null and reg.m16_osid is null then 'no outstation id available'
+    when cfg.mpan is null then 'no config details available'
+    else null end as data_comment,
+    
+    --agents
+    to_date(mop.m11_ef_frm_date) as mop_start,
+    to_date(mop.m12_ef_to_date) as mop_end,
+	iff(mop.m11_cn_rf like '%HHMOP1%' or mop.m11_cn_rf like '%HHM01%' OR mop.m11_cn_rf like '%HHLOND%','HH','NHH') as mop_appointment_type,
+    mop.m11_cn_rf as mop_contract_reference,
+    case
+    when c2m.mpan is not null and krkn.mpan is null and mop.m11_sup_id in ('LOND','SEEB','SWEB') then 'EBS'
+    when c2m.mpan is null and krkn.mpan is not null and mop.m11_sup_id in ('EDFE') then 'SME'
+    when mop.m11_sup_id not in ('EDFE','LOND','SEEB','SWEB') then 'T2'
+    else 'T1 Unknown' end as supplier_tier,
+    krkn.market as market,
+    mop.m11_sup_id as supplier,
+    mop.m11_dtcid as dc,
+    mop.m11_ldsoid as dno,
+    --to_date(mop.m11_ef_st_date) as regi_date,
+
+    --customer info
+    jw.ebs_mop_contract_status as contract_status,
+    jw.ebs_mop_billing_status,
+    jw.ebs_mop_customer as customer_name_mop,
+    c2m.ebs_energy_customer as customer_name,
+    c2m.ebs_energy_segment,
+    c2m.ebs_energy_micro_flag as micro_flag,
+    c2m.ebs_energy_eac as eac,
+    c2m.ebs_energy_mop as meter_operator,
+    
+    --location
+    --split_part(mop.postcode, ' ', 1) AS outcode,
+    upper(array_to_string(array_compact(array_construct(trim(mop.address_line1),trim(mop.address_line2),trim(mop.address_line3),trim(mop.address_line4),trim(mop.address_line5),trim(mop.address_line6),trim(mop.address_line7),trim(mop.address_line8),trim(mop.address_line9))), ', ')) as site_address,
+    mop.postcode as site_postcode,
+
+    --james added individual address columns
+    --mop.address_line1 as street1,
+    --mop.address_line2 as street2,
+    --mop.address_line3 as street3,
+    --mop.address_line4 as street4,
+    --mop.address_line5 as street5,
+    --mop.address_line6 as street6,
+    --mop.address_line7 as street7,
+    --mop.address_line8 as street8,
+    --mop.address_line9 as street9,
+    
+    --industry
+    mpan.m13_ens as energization_status,
+    mop.m11_gspgid as gsp_group,
+    mpan.m13_ssci as ssc,
+    mpan.m13_rtmd as retrieval_method,
+    to_date(mpan.m13_efsd) as msmtd_efd,
+    mpan.m13_mci as measurement_class,
+    mpan.m13_mcp as cop,
+    -- count(distinct obj.serial_no) over (partition by mpan.mpan) as meter_quantity,
+    count(distinct mpan.mpan) over (partition by obj.serial_no) > 1 as multi_mpan,
+
+    
+    
+    --meter technical details
+    mpmd.m15_mtty as meter_type,
+    try_to_number(cfg.m14_com_adr) = 0 and cfg.m14_com_adr is not null and mpmd.m15_mtty in ('NCAMR','RCAMR','RCAMY') as undumbed_amr,
+    to_date(mpmd.m15_dmin) as date_installed,
+    mop_start <= date_installed as installed_in_current_mop_appointment,
+    mpmd.m15_mfmt as make_and_type,
+    mpmd.m15_ml as meter_location,
+    mpmd.m15_mcr as current_rating,
+    mpmd.m15_map as map_id,
+    iff(((obj.serial_no like 'K%' and (obj.serial_no like '%A%' or obj.serial_no like '%B%') and obj.serial_no not like '%[^ABK]%') or obj.serial_no like 'EML%'),'TRUE','FALSE') as edf_msn,
+    iff(try_to_number(regexp_replace(mpmd.m15_cr, '[^a-zA-Z0-9 ]', '')) is not null,'CT','WC') as wc_or_ct,
+    mpmd.m15_cr as ct_ratio,
+    iff(try_to_number(regexp_replace(mpmd.m15_vtrt, '[^a-zA-Z0-9 ]', '')) is not null,'HV','LV') as lv_or_hv,
+    mpmd.m15_vtrt as vt_ratio,
+    
+    mpmd.m15_fs as feeder_status,
+    mpmd.m15_mpw as phase_wire,
+    mpmd.c_meter_config_code as config_code,
+	cfg.m14_bud_rte as baud_rate,
+	cfg.m14_osnc as number_of_channels,
+	cfg.m14_osnd as number_of_dials,
+    
+    --communication details
+    reg.m16_osid as outstation_id,
+	cfg.m14_ostp as outstation_type,
+	cfg.m14_otp as outstation_pin,
+	cfg.m14_com_mtd as communication_method,
+	cfg.m14_com_adr as communication_address,
+	cfg.m14_com_prd as communication_provider,
+	cfg.m14_oul1 as level_1_username,
+	cfg.m14_opl1 as level_1_password,
+	cfg.m14_oul2 as level_2_username,
+	cfg.m14_opl2 as level_2_password,
+	cfg.m14_oul3 as level_3_username,
+	cfg.m14_opl3 as level_3_password,
+
+from flk_dub_db_datalake_prd.staging_ifs_realtime.qfact_equipment_object_ias_bi as equi
+join flk_dub_db_datalake_prd.staging_ifs_realtime.qfact_serial_object_ias_bi as obj
+on equi.serial_no = obj.serial_no
+join flk_dub_db_datalake_prd.staging_ifs_realtime.qfact_c_mpan_meter_detail_bi as mpmd
+on equi.mch_code =  mpmd.m15_meter_id and equi.equipment_object_seq =  mpmd.equipment_object_seq
+left join flk_dub_db_datalake_prd.staging_ifs_realtime.fact_c_mop_mpan_details_ias_bi as mpan
+on mpan.mpan = mpmd.mpan
+left join flk_dub_db_datalake_prd.staging_ifs_realtime.qfact_c_mpan_app_de_app_ias_bi as mop
+on mpan.mpan = mop.mpan
+left join flk_dub_db_datalake_prd.staging_ifs_realtime.qfact_c_mpan_meter_reg_de_bi reg
+on equi.mch_code = reg.serial_id
+left join flk_dub_db_datalake_prd.staging_ifs_realtime.qfact_mop_meter_config_dtl_bi as cfg
+on cfg.m14_os_id = reg.m16_osid and cfg.mpan =  mpmd.mpan
+left join krkn
+on krkn.mpan = mpan.mpan
+left join c2m
+on c2m.mpan = mpan.mpan
+left join jw
+on jw.mpan = mpan.mpan
+
+where to_date(mop.m11_ef_frm_date) <= CURRENT_DATE
+and to_date(mop.m12_ef_to_date) >= CURRENT_DATE
+and mpmd.m15_mtty in ('H', 'RCAMY', 'RCAMR', 'NCAMR')
+order by record_id

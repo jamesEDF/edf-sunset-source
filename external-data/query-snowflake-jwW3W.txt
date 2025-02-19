@@ -1,0 +1,84 @@
+SELECT mpan, site_w3w, meter_w3w
+FROM (
+    -- 1) CRM contact records
+    SELECT
+         CASE 
+            WHEN regexp_substr(c.reference, 'MSID\\s+\\d+') IS NOT NULL THEN regexp_substr(c.reference, 'MSID\\s+\\d+')
+            WHEN regexp_substr(c.name, 'MSID\\s+\\d+') IS NOT NULL THEN regexp_substr(c.name, 'MSID\\s+\\d+')
+            WHEN regexp_substr(c.reference, '[0-9]{13}') IS NULL 
+                 AND regexp_substr(c.name, '[0-9]{13}') IS NULL THEN c.reference
+            WHEN regexp_substr(c.reference, '[0-9]{13}') IS NOT NULL THEN regexp_substr(c.reference, '[0-9]{13}')
+            ELSE regexp_substr(c.name, '[0-9]{13}')
+         END AS mpan,
+         sw3w.value AS site_w3w,
+         mw3w.value AS meter_w3w
+    FROM bigchange2175edfenergyltd.bigchange_2175_edf_energy_ltd.contacts_v1 c
+    LEFT JOIN bigchange2175edfenergyltd.bigchange_2175_edf_energy_ltd.contact_custom_fields_v1 sw3w
+           ON sw3w._contact_id = c.id 
+              AND sw3w.label = 'Meter W3W' 
+              AND sw3w.value <> '' 
+              AND sw3w.value IS NOT NULL
+    LEFT JOIN bigchange2175edfenergyltd.bigchange_2175_edf_energy_ltd.contact_custom_fields_v1 mw3w
+           ON mw3w._contact_id = c.id 
+              AND mw3w.label = 'Meter W3W'
+    WHERE c.deleted_at IS NULL
+      AND c.group_name = 'Site'
+)
+
+UNION
+
+SELECT mpan, site_w3w, meter_w3w
+FROM (
+    -- 2) Job records
+    SELECT
+         CASE 
+            WHEN regexp_substr(j.contact_reference, 'MSID\\s+\\d+') IS NOT NULL THEN regexp_substr(j.contact_reference, 'MSID\\s+\\d+')
+            WHEN regexp_substr(j.contact_name, 'MSID\\s+\\d+') IS NOT NULL THEN regexp_substr(j.contact_name, 'MSID\\s+\\d+')
+            WHEN regexp_substr(j.contact_reference, '[0-9]{13}') IS NULL 
+                 AND regexp_substr(j.contact_name, '[0-9]{13}') IS NULL THEN j.contact_reference
+            WHEN regexp_substr(j.contact_reference, '[0-9]{13}') IS NOT NULL THEN regexp_substr(j.contact_reference, '[0-9]{13}')
+            ELSE regexp_substr(j.contact_name, '[0-9]{13}')
+         END AS mpan,
+         sw3w.value AS site_w3w,
+         mw3w.value AS meter_w3w
+    FROM bigchange2175edfenergyltd.bigchange_2175_edf_energy_ltd.jobs_v1 j
+    LEFT JOIN bigchange2175edfenergyltd.bigchange_2175_edf_energy_ltd.job_custom_fields_v1 sw3w
+           ON sw3w._job_id = j.id 
+              AND sw3w.label = 'Meter W3W' 
+              AND sw3w.value <> '' 
+              AND sw3w.value IS NOT NULL
+    LEFT JOIN bigchange2175edfenergyltd.bigchange_2175_edf_energy_ltd.job_custom_fields_v1 mw3w
+           ON mw3w._job_id = j.id 
+              AND mw3w.label = 'Meter W3W' 
+              AND mw3w.value <> '' 
+              AND mw3w.value IS NOT NULL
+)
+
+UNION
+
+SELECT mpan, site_w3w, meter_w3w
+FROM (
+    -- 3) Job worksheets
+    SELECT
+         CASE 
+            WHEN regexp_substr(j.contact_reference, 'MSID\\s+\\d+') IS NOT NULL THEN regexp_substr(j.contact_reference, 'MSID\\s+\\d+')
+            WHEN regexp_substr(j.contact_name, 'MSID\\s+\\d+') IS NOT NULL THEN regexp_substr(j.contact_name, 'MSID\\s+\\d+')
+            WHEN regexp_substr(j.contact_reference, '[0-9]{13}') IS NULL 
+                 AND regexp_substr(j.contact_name, '[0-9]{13}') IS NULL THEN j.contact_reference
+            WHEN regexp_substr(j.contact_reference, '[0-9]{13}') IS NOT NULL THEN regexp_substr(j.contact_reference, '[0-9]{13}')
+            ELSE regexp_substr(j.contact_name, '[0-9]{13}')
+         END AS mpan,
+         sw3w.answer_text AS site_w3w,
+         mw3w.answer_text AS meter_w3w
+    FROM bigchange2175edfenergyltd.bigchange_2175_edf_energy_ltd.jobs_v1 j
+    LEFT JOIN bigchange2175edfenergyltd.bigchange_2175_edf_energy_ltd.job_worksheet_answers_v1 sw3w
+           ON sw3w._job_id = j.id 
+              AND sw3w.question_text = 'Site W3W location' 
+              AND sw3w.answer_text <> '' 
+              AND sw3w.answer_text IS NOT NULL
+    LEFT JOIN bigchange2175edfenergyltd.bigchange_2175_edf_energy_ltd.job_worksheet_answers_v1 mw3w
+           ON mw3w._job_id = j.id 
+              AND mw3w.question_text = 'Meter W3W location' 
+              AND mw3w.answer_text <> '' 
+              AND mw3w.answer_text IS NOT NULL
+);

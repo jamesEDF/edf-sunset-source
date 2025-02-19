@@ -71,6 +71,22 @@ dedupe_one_record_id <- function(df_subset) {
   return(df_subset)
 }
 
+
+############################################################################################
+# FUNCTION(S) THAT CLEANS ANY KNOWN DATE ERRORS WHEN IMPORTING PORFOLIO
+############################################################################################
+
+fix_invalid_dates <- function(x) {
+  # 1) Convert to character so we can match patterns safely
+  x_char <- as.character(x)
+  # 2) Create a logical mask for valid dates starting with '19' or '20'
+  valid_mask <- grepl("^(19|20)", x_char)
+  # 3) Replace invalid entries with NA
+  x_char[!valid_mask] <- NA
+  # 4) Return the resulting character vector
+  x_char
+}
+
 ############################################################################################
 # NEXT FUNCTION
 ############################################################################################

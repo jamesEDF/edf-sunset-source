@@ -1,0 +1,264 @@
+-- JAMES DYER SUPPLY QUERY (FUGDED)
+-- this takes a bit of MPAN logic from EBS MPAN Golden Table (Simon Aplin) (basically, SERVICEAGREEMENT
+-- and LIVEACCOUNTFLAG checks) and adds to existing meter level query made by Charlie Reeves & Devon Brown
+
+WITH live_on_supply AS (
+SELECT DISTINCT
+  sp.MPANCORE, 
+  cus.CUSTOMERNAME_CURRENT AS CUSTOMERNAME_CURRENT,
+  cus.CUSTOMERID,
+  cus.ACTIVEDATE AS customer_active_date,
+  s.SITEID,
+  acc.ACCOUNTID,
+  acc.LIVEACCOUNTFLAG,
+  acc.ACCOUNTSETUPDATE,
+  acc.ACCOUNTSTARTDATE,
+  sa.IMPORTEXPORTFLAG AS SAIMPORTEXPORTFLAG,
+  sa.SERVICEAGREEMENTTYPE AS SATYPE,
+  sa.SERVICEAGREEMENTID AS SAID,
+  sa.SASTARTDATE,
+  sa.SAENDDATE,
+  sa.SERVICEAGREEMENTSTATUS AS SASTATUS,
+  saeff.RATESCHEDULEDESC AS SARATESCHEDULE,
+  sp.MARKETSEGMENT_CURRENT AS MARKETSEGMENT,
+  sp.SUPPLIERKEY,
+  sp.STANDARDSETTLEMENTCONFIGURATIONKEY_CURRENT,
+  sp.INDUSTRYSTANDARDSETTLEMENTCONFIGURATION,
+  s.ADDRESSLINE1 AS SITE_ADDRESSLINE1,
+  s.ADDRESSLINE2 AS SITE_ADDRESSLINE2,
+  s.ADDRESSLINE3 AS SITE_ADDRESSLINE3,
+  s.ADDRESSLINE4 AS SITE_ADDRESSLINE4,
+  s.ADDRESS AS SITE_ADDRESS,
+  s.CITY AS SITE_CITY,
+  s.COUNTY AS SITE_COUNTY,
+  s.POSTCODEOUT AS SITE_POSTCODEOUT,
+  s.POSTCODEIN AS SITE_POSTCODEIN,
+  sp.MEASUREMENTCLASSKEY_CURRENT AS MEASUREMENTCLASS,
+  sp.PROFILECLASSKEY_CURRENT AS PROFILECLASSKEY_CURRENT,
+  sp.INDUSTRYPROFILECLASS AS INDUSTRYPROFILECLASS,
+  sp.INDUSTRYMETEROPERATOR AS INDUSTRYMETEROPERATOR,
+  sp.METEROPERATORKEY AS METEROPERATORKEY,
+  con.TPIPRIMARYNAME AS TPIName,
+  con.CONTRACTSTARTDATE,
+
+  ROW_NUMBER() OVER (
+    PARTITION BY sp.MPANCORE
+    ORDER BY con.CONTRACTSTARTDATE DESC
+  ) AS rn
+
+FROM FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.FACTSERVICEPOINT fsp
+JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMSERVICEPOINT sp ON fsp.SK_SERVICEPOINTID = sp.SK_SERVICEPOINTID
+JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMCUSTOMER cus ON fsp.SK_CUSTOMERID = cus.SK_CUSTOMERID
+JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMSITE s ON fsp.SK_SITEID = s.SK_SITEID
+JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMACCOUNT acc ON fsp.SK_ACCOUNTID = acc.SK_ACCOUNTID
+JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMSERVICEAGREEMENT sa ON fsp.SK_SERVICEAGREEMENTID = sa.SK_SERVICEAGREEMENTID
+       -- Retain the same conditions on SERVICEAGREEMENT and LIVEACCOUNTFLAG:
+  AND sa.SERVICETYPE = 'Energy Service'
+  AND (
+       (
+         sa.SERVICEAGREEMENTSTATUS IN ('Active','Pending Stop','Stopped','Reactivated','Closed') 
+         AND acc.LIVEACCOUNTFLAG = 'Yes'
+       )
+       OR (
+         sa.SERVICEAGREEMENTSTATUS NOT IN ('Canceled','Cancelled','Pending Start','Pending Stop','Active')
+         AND acc.LIVEACCOUNTFLAG = 'No'
+       )
+  )
+JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMCONTRACT con ON con.SK_CONTRACTID = fsp.SK_CONTRACTID
+JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMSERVICEAGREEMENTEFFECTIVEDETAIL saeff ON saeff.SK_SERVICEAGREEMENTEFFECTIVEDETAILID = fsp.SK_SERVICEAGREEMENTEFFECTIVEDETAILID
+WHERE TRUE
+  AND acc.LIVEACCOUNTFLAG = 'Yes'
+  AND sa.SERVICEAGREEMENTSTATUS IN ('Active','Pending Stop')
+  AND sp.SUPPLIERKEY IN ('LOND', 'SEEB', 'SWEB')
+  --AND sa.IMPORTEXPORTFLAG = 'Import'
+),
+
+installed_meters AS (
+SELECT DISTINCT
+  d1_dvc.d1_device_id,
+  d1_sp_identifier.id_value AS MPAN,
+  REGEXP_REPLACE(RTRIM(d1_dvc_identifier.id_value,'_P272'),'[[:punct:]]|[ ]','') AS msn,
+  d1_dvc_cfg.eff_dttm AS date_installed,
+  --d1_dvc_cfg.status_upd_dttm,
+  d1_dvc.d1_model_cd AS OutstationType
+FROM flk_dub_db_datalake_prd.staging_mdm.d1_dvc
+INNER JOIN flk_dub_db_datalake_prd.staging_mdm.d1_dvc_identifier
+  ON d1_dvc_identifier.d1_device_id = d1_dvc.d1_device_id
+  AND d1_dvc_identifier.deleteflag = 'FALSE'
+INNER JOIN flk_dub_db_datalake_prd.staging_mdm.d1_dvc_cfg
+  ON d1_dvc_cfg.d1_device_id = d1_dvc.d1_device_id
+  AND d1_dvc_cfg.deleteflag = 'FALSE'
+INNER JOIN flk_dub_db_datalake_prd.staging_mdm.d1_install_evt
+  ON d1_install_evt.device_config_id = d1_dvc_cfg.device_config_id
+  AND d1_install_evt.deleteflag = 'FALSE'
+INNER JOIN flk_dub_db_datalake_prd.staging_mdm.d1_sp_rel
+  ON d1_sp_rel.d1_sp_id = d1_install_evt.d1_sp_id
+  AND d1_sp_rel.deleteflag = 'FALSE'
+INNER JOIN flk_dub_db_datalake_prd.staging_mdm.d1_sp_identifier
+  ON d1_sp_identifier.d1_sp_id = d1_sp_rel.REL_SP_ID
+  AND d1_sp_identifier.deleteflag = 'FALSE'
+  AND d1_sp_identifier.sp_id_type_flg = 'DMMI'
+WHERE TRUE
+  and d1_dvc.deleteflag = 'FALSE'
+  and d1_dvc.bo_status_cd = 'ACTIVE'
+),
+ 
+com_addr AS (
+SELECT DISTINCT
+  d1_device_id,
+  effdt,
+  adhoc_char_val
+FROM flk_dub_db_datalake_prd.staging_mdm.d1_dvc_char
+WHERE TRUE
+  and deleteflag = 'FALSE'
+  and char_type_cd = 'DMCOMAD'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY d1_device_id ORDER BY effdt DESC) = 1
+),
+ 
+meter_type AS (
+SELECT DISTINCT
+  d1_device_id,
+  effdt,
+  char_val
+FROM flk_dub_db_datalake_prd.staging_mdm.d1_dvc_char
+WHERE TRUE
+  and deleteflag = 'FALSE'
+  and char_type_cd = 'DMMTYP'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY d1_device_id ORDER BY effdt DESC) = 1
+),
+ 
+com_method AS (
+SELECT DISTINCT
+  d1_device_id,
+  effdt,
+  char_val
+FROM flk_dub_db_datalake_prd.staging_mdm.d1_dvc_char
+WHERE TRUE 
+  and deleteflag = 'FALSE'
+  and char_type_cd = 'DMCOMMET'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY d1_device_id ORDER BY effdt DESC) = 1
+),
+ 
+ecoes AS (
+SELECT DISTINCT
+  current_stage.mpan,
+  current_stage.mc,
+  REGEXP_REPLACE(mpanmsn.meter_serial,'[[:punct:]]|[ ]','') AS meter_serial,
+  TRY_TO_DATE(mpanmsn.meter_install_date,'YYYYMMDD') AS meter_install_date,
+FROM flk_dub_db_datalake_prd.staging_ecoes.current_stage
+LEFT JOIN flk_dub_db_datalake_prd.staging_ecoes.mpanmsn
+  ON mpanmsn.mpan = current_stage.mpan
+  AND mpanmsn.deleteflag = 'FALSE'
+WHERE current_stage.deleteflag = 'FALSE'
+),
+ 
+ecoes_count AS (
+SELECT 
+  mpan, 
+  COUNT(DISTINCT meter_serial) AS cnt 
+FROM ecoes 
+WHERE meter_serial IS NOT NULL 
+GROUP BY mpan
+),
+
+eac_data AS (
+    SELECT
+        eac1.MPANCORE,
+        eac1.ACCOUNTID,
+        SUM(eac1.METERINGSYSTEMEACKWH) AS METERINGSYSTEMEACKWH,
+        eac1.DATEVALUE
+    FROM (
+        SELECT
+            sp.MPANCORE,
+            a.ACCOUNTID,
+            MAX(dd.DATEVALUE) OVER (PARTITION BY sp.MPANCORE, a.ACCOUNTID) AS MAXDATE,
+            dd.DATEVALUE,
+            fmse.METERINGSYSTEMEACKWH
+        FROM
+            FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.FACTMETERINGSYSTEMEAC fmse
+            JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMSERVICEPOINT sp ON sp.SK_SERVICEPOINTID = fmse.SK_SERVICEPOINTID
+            JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMACCOUNT a ON a.SK_ACCOUNTID = fmse.SK_ACCOUNTID
+            JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMDATE dd ON dd.SK_DATEID = fmse.SK_EFFECTIVEFROMDATEID
+            JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMEACDETAIL ed ON ed.SK_EACDETAILID = fmse.SK_EACDETAILID
+            AND ed.ISCURRENTEAC = 'Yes'
+    ) eac1
+    WHERE
+        eac1.DATEVALUE = eac1.MAXDATE
+    GROUP BY
+        eac1.MPANCORE,
+        eac1.ACCOUNTID,
+        eac1.DATEVALUE
+)
+
+-- james added this (fudge) to get the latest TPIName for each MPAN.
+-- it should keep all contract rows and just get latest TPIName (i.e., it doesn't affect the queries number of total rows).
+-- This will need to be looked at in the future so that correct TPI is used properly (not just latest. pulling correct tpi for correct contract/SA, etc).
+, latest_tpi AS (
+    SELECT
+       los.MPANCORE,
+       los.TPIName,
+       los.CONTRACTSTARTDATE
+    FROM live_on_supply los
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY los.MPANCORE
+        ORDER BY los.CONTRACTSTARTDATE DESC
+    ) = 1
+),
+
+-- MAIN SELECT
+main as (
+SELECT DISTINCT
+  CONCAT(los.mpancore,' - ',im.msn) AS record_id,
+  los.mpancore AS mpan,
+  -- COUNT(DISTINCT im.msn) OVER(PARTITION BY los.mpancore) AS mtr_count,
+  im.msn AS msn,
+  mt.char_val AS meter_type,
+  TO_DATE(im.date_installed) AS date_installed,
+  im.OutstationType AS outstation_type, --fine
+  cm.char_val AS communication_method,
+  ca.adhoc_char_val AS communication_address,
+  los.SAIMPORTEXPORTFLAG AS import_export_flag,
+  --im.d1_device_id IS NOT NULL AS meter_installed,
+  --ecoes.meter_serial ecoes_msn,
+  --ecoes.meter_install_date ecoes_installed,
+  --CASE WHEN ecoes_installed IS NULL THEN NULL WHEN date_installed = ecoes_installed THEN 'TRUE' ELSE 'FALSE' END AS install_match,
+  --ec.cnt AS ecoes_mtr_count,
+  --mtr_count - ecoes_mtr_count AS diff
+  los.STANDARDSETTLEMENTCONFIGURATIONKEY_CURRENT AS ssc,
+  --los.INDUSTRYSTANDARDSETTLEMENTCONFIGURATION AS ssc_industry,
+  --los.SITE_ADDRESSLINE1 as street1,
+  --los.SITE_ADDRESSLINE2 as street2,
+  --los.SITE_ADDRESSLINE3 as street3,
+  --los.SITE_ADDRESSLINE4 as street4,
+  --los.SITE_CITY as street5,
+  --los.SITE_COUNTY as street6,
+  --TRIM(los.SITE_POSTCODEOUT) as postcode_out,
+  --TRIM(los.SITE_POSTCODEIN) as postcode_in,
+  CONCAT(TRIM(los.SITE_POSTCODEOUT), ' ', TRIM(los.SITE_POSTCODEIN)) AS site_postcode,
+  los.SITE_ADDRESS as site_address,
+  los.CUSTOMERNAME_CURRENT as customer_name,
+  los.customer_active_date,
+  los.PROFILECLASSKEY_CURRENT as profile_class,
+  --los.INDUSTRYPROFILECLASS as profile_class_industry,
+  los.METEROPERATORKEY as meter_operator,
+  --los.INDUSTRYMETEROPERATOR as meter_operator_industry,
+  los.MEASUREMENTCLASS as measurement_class,
+  eac_data.METERINGSYSTEMEACKWH as eac,
+  eac_data.DATEVALUE as eac_date,
+  los.SUPPLIERKEY AS supplier,
+  --los.marketsegment,
+  lts.TPIName,
+
+FROM live_on_supply los
+INNER JOIN installed_meters im ON im.MPAN = los.mpancore --CHANGED FROM LEFT TO ONLY INCLUDE INSTALLED METERS FOR EBS SUPPLY
+LEFT JOIN latest_tpi lts ON lts.MPANCORE = los.MPANCORE
+LEFT JOIN com_addr ca ON ca.d1_device_id = im.d1_device_id
+LEFT JOIN meter_type mt ON mt.d1_device_id = im.d1_device_id
+LEFT JOIN com_method cm ON cm.d1_device_id = im.d1_device_id
+--LEFT JOIN Ecoes ON Ecoes.mpan = los.mpancore AND Ecoes.meter_serial = im.msn
+--LEFT JOIN flk_dub_db_datalake_prd.dim_consumption_iac.v_dimservicepoint vdsp ON vdsp.SITEID = los.siteid
+--LEFT JOIN ecoes_count ec ON ec.mpan = los.mpancore)
+LEFT JOIN eac_data ON eac_data.MPANCORE = los.mpancore AND eac_data.ACCOUNTID = los.ACCOUNTID
+)
+
+select distinct * from main ORDER BY mpan, msn

@@ -1,0 +1,40 @@
+-- SQL query that gets all D0001 data from IFS BUT it's only since migration, i.e., since we've had IFS. No old faults before then (Oct 2024).
+
+WITH cte AS (
+    SELECT
+        MOP02.DT_FAULT_DTCD AS notification_creation_date,
+        MOP02.ADDITIONAL_INFO AS short_text,
+        MOP02.REASON_FOR_REQ_DTL AS fault_description,
+        METERDETAILS.MPAN AS mpan,
+        METEROBJECT.MCH_CODE AS msn,
+        CONCAT(METERDETAILS.MPAN, ' - ', METEROBJECT.MCH_CODE) AS record_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY CONCAT(METERDETAILS.MPAN, ' - ', METEROBJECT.MCH_CODE)
+            ORDER BY MOP02.DT_FAULT_DTCD DESC
+        ) AS rn
+    FROM FLK_DUB_DB_DATALAKE_PRD.STAGING_IFS_REALTIME.QFACT_C_MOP02_DETAILS_IAS_BI MOP02
+    JOIN FLK_DUB_DB_DATALAKE_PRD.STAGING_IFS_REALTIME.QFACT_C_MPAN_METER_REG_DE_BI AS METERDETAILS
+        ON MOP02.MPAN_CORE = METERDETAILS.MPAN
+        AND MOP02.METER_ID = METERDETAILS.SERIAL_ID
+    JOIN FLK_DUB_DB_DATALAKE_PRD.STAGING_IFS_REALTIME.FACT_C_MOP_MPAN_DETAILS_IAS_BI AS MPANDETAILS
+        ON MPANDETAILS.MPAN = METERDETAILS.MPAN
+    JOIN FLK_DUB_DB_DATALAKE_PRD.STAGING_IFS_REALTIME.QFACT_EQUIPMENT_OBJECT_IAS_BI AS METEROBJECT
+        ON METERDETAILS.SERIAL_ID = METEROBJECT.MCH_CODE
+    WHERE METEROBJECT.MCH_TYPE IN ('RCAMR', 'NCAMR', 'RCAMY', 'H')
+      AND MOP02.JOB_REQUESTED_FLOW LIKE '%D0001%'
+      AND (
+         MOP02.DT_FAULT_DTCD >= (CURRENT_DATE - 45)
+         AND MOP02.DT_FAULT_DTCD <= (CURRENT_DATE + 45)
+      )
+)
+SELECT
+    notification_creation_date,
+    short_text,
+    fault_description,
+    mpan,
+    msn,
+    record_id
+FROM cte
+WHERE rn = 1  -- Keep only the latest row per record_id
+ORDER BY notification_creation_date
+;

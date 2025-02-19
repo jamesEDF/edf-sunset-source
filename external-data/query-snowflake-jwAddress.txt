@@ -1,0 +1,23 @@
+SELECT DISTINCT
+    CREATED_AT,
+    UPPER(
+      ARRAY_TO_STRING(
+        ARRAY_COMPACT(
+          ARRAY_CONSTRUCT(
+            TRIM(ADDRESS_STREET),
+            TRIM(ADDRESS_TOWN)
+          )
+        ),
+        ', '
+      )
+    ) AS SITE_ADDRESS,
+    ADDRESS_POSTAL_CODE AS SITE_POSTCODE,
+    REFERENCE
+FROM BIGCHANGE2175EDFENERGYLTD.BIGCHANGE_2175_EDF_ENERGY_LTD.CONTACTS_V1
+-- Keep only references containing at least one digit
+--WHERE REGEXP_LIKE(REFERENCE, '[0-9]')
+-- Keep only the latest CREATED_AT row for each reference
+QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY REFERENCE
+    ORDER BY CREATED_AT DESC
+) = 1;

@@ -1,0 +1,27 @@
+-- ecoes data pull (only supplier ecoes is in CDL)
+
+SELECT DISTINCT
+       current_stage.MPAN,
+       METER_SERIAL,
+       DC_ID as dc,
+       -- TO_DATE(DC_DATE, 'YYYYMMDD') AS dc_start,
+       current_stage.MPAN || ' - ' || METER_SERIAL AS RECORD_ID,
+       UPPER(ARRAY_TO_STRING(ARRAY_COMPACT(ARRAY_CONSTRUCT(
+               TRIM(current_stage.ADDRESS1),
+               TRIM(current_stage.ADDRESS2),
+               TRIM(current_stage.ADDRESS3),
+               TRIM(current_stage.ADDRESS4),
+               TRIM(current_stage.ADDRESS5),
+               TRIM(current_stage.ADDRESS6),
+               TRIM(current_stage.ADDRESS7),
+               TRIM(current_stage.ADDRESS8),
+               TRIM(current_stage.ADDRESS9)
+               )),', ')) AS site_address,
+               post_code as site_postcode,
+	mc AS measurement_class
+from flk_dub_db_datalake_prd.staging_ecoes.current_stage
+inner join flk_dub_db_datalake_prd.staging_ecoes.mpanmsn
+    on mpanmsn.mpan = current_stage.mpan
+    and mpanmsn.deleteflag = 'FALSE'
+-- where supplier_id != 'EDFE'
+;
