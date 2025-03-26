@@ -72,8 +72,12 @@ select distinct
     --customer info
     jw.ebs_mop_contract_status as contract_status,
     jw.ebs_mop_billing_status,
-    jw.ebs_mop_customer as customer_name_mop,
-    c2m.ebs_energy_customer as customer_name,
+
+    -- the below two sources have been coalesced into one
+    --jw.ebs_mop_customer as customer_name_mop,
+    --c2m.ebs_energy_customer as customer_name,
+    coalesce(c2m.ebs_energy_customer, jw.ebs_mop_customer) as customer_name,
+
     c2m.ebs_energy_segment,
     c2m.ebs_energy_micro_flag as micro_flag,
     c2m.ebs_energy_eac as eac,
@@ -96,7 +100,7 @@ select distinct
     --mop.address_line9 as street9,
     
     --industry
-    mpan.m13_ens as energization_status,
+    mpan.m13_ens as energisation_status,
     mop.m11_gspgid as gsp_group,
     mpan.m13_ssci as ssc,
     mpan.m13_rtmd as retrieval_method,
@@ -120,7 +124,7 @@ select distinct
     iff(((obj.serial_no like 'K%' and (obj.serial_no like '%A%' or obj.serial_no like '%B%') and obj.serial_no not like '%[^ABK]%') or obj.serial_no like 'EML%'),'TRUE','FALSE') as edf_msn,
     iff(try_to_number(regexp_replace(mpmd.m15_cr, '[^a-zA-Z0-9 ]', '')) is not null,'CT','WC') as wc_or_ct,
     mpmd.m15_cr as ct_ratio,
-    iff(try_to_number(regexp_replace(mpmd.m15_vtrt, '[^a-zA-Z0-9 ]', '')) is not null,'HV','LV') as lv_or_hv,
+    iff(try_to_number(regexp_replace(mpmd.m15_vtrt, '[^a-zA-Z0-9 ]', '')) is not null,'H - High Voltage','L - Low Voltage') as voltage_type,
     mpmd.m15_vtrt as vt_ratio,
     
     mpmd.m15_fs as feeder_status,

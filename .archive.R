@@ -209,4 +209,85 @@ df_addr_mop_4 <- data.frame(lapply(df_addr_mop_3, function(x) if (is.character(x
 # write_csv(df_combined_red, file.path(base_path, "exported-data/df_combined_red.csv"))
 
 
+############################################################################
+# old way of formatting to single view file
+############################################################################
 
+  
+  # creating new, nicely-formatted, single view
+  wb <- createWorkbook()
+  addWorksheet(wb, "SINGLEVIEW")
+  
+  # Make a bold style for column headers
+  header_style <- createStyle(
+    fgFill = "#E2EFDA",
+    textDecoration = "bold",
+    halign = "center",
+    border = c("bottom","left","right")
+  )
+  
+  # Write the Percent_Missing row into row 2.
+  # Transpose it so that each element goes into its own column.
+  # Set colNames = FALSE to avoid writing column names.
+  writeData(
+    wb,
+    sheet = "SINGLEVIEW",
+    x = as.data.frame(t(percent_missing_row)),
+    startRow = 2,
+    startCol = 1,
+    colNames = FALSE
+  )
+  
+  # Write data at row 2, col 1
+  writeData(
+    wb,
+    sheet = "SINGLEVIEW",
+    x = df_single_view,
+    startRow = 3,
+    startCol = 1,
+    headerStyle = header_style
+  )
+  
+  mergeCells(wb, "SINGLEVIEW", cols = 1:18, rows = 1)
+  writeData(wb, "SINGLEVIEW", "Meter details", startRow = 1, startCol = 1)
+  mergeCells(wb, "SINGLEVIEW", cols = 19:30, rows = 1)
+  writeData(wb, "SINGLEVIEW", "Comms details", startRow = 1, startCol = 19)
+  mergeCells(wb, "SINGLEVIEW", cols = 31:40, rows = 1)
+  writeData(wb, "SINGLEVIEW", "Meter agents", startRow = 1, startCol = 31)
+  mergeCells(wb, "SINGLEVIEW", cols = 41:50, rows = 1)
+  writeData(wb, "SINGLEVIEW", "Customer info", startRow = 1, startCol = 41)
+  mergeCells(wb, "SINGLEVIEW", cols = 51:63, rows = 1)
+  writeData(wb, "SINGLEVIEW", "Site location", startRow = 1, startCol = 51)
+  mergeCells(wb, "SINGLEVIEW", cols = 64:67, rows = 1)
+  writeData(wb, "SINGLEVIEW", "Settlement", startRow = 1, startCol = 64)
+  mergeCells(wb, "SINGLEVIEW", cols = 68:71, rows = 1)
+  writeData(wb, "SINGLEVIEW", "Job details", startRow = 1, startCol = 68)
+  mergeCells(wb, "SINGLEVIEW", cols = 72:74, rows = 1)
+  writeData(wb, "SINGLEVIEW", "Fault details", startRow = 1, startCol = 72)
+  
+  
+  group_header_style <- createStyle(
+    fgFill = "#D9E1F2",      # background color
+    halign = "CENTER",
+    border = c("bottom","left","right")
+  )
+  
+  # Apply that style across row 1 for all columns that are merged
+  # For example, if you know your data extends to column 70:
+  addStyle(
+    wb, 
+    sheet = "SINGLEVIEW", 
+    style = group_header_style, 
+    rows = 1, 
+    cols = 1:74, 
+    gridExpand = TRUE
+  )
+  
+  setColWidths(wb, sheet = "SINGLEVIEW", cols = 1:74, widths = "auto")
+  setColWidths(wb, sheet = "SINGLEVIEW", cols = c(12,39,41,49,51,52,53,54,55,56,62,63,64,69,72,74), widths = 15)
+  
+  
+  saveWorkbook(wb, file = file.path(base_path, "exported-data/single_view_FORMATTED.xlsx"), overwrite = TRUE)
+  
+  
+)

@@ -1,0 +1,123 @@
+WITH cte_installed_meters AS (
+    SELECT DISTINCT
+        CONCAT(LTRIM(equi.serge,'0'),' - ' ,euitrans.ext_ui) AS recordid,
+        euihead.int_ui,
+        euitrans.ext_ui AS mpan,
+        LTRIM(equi.serge,'0')       AS serge,  -- meter serial number
+        TRY_TO_NUMBER(equi.baujj)   AS baujj,  -- manufactured year
+        equi.eqart
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.egerh
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.equi
+        ON egerh.equnr = equi.equnr
+        AND equi.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.eastl
+        ON egerh.logiknr = eastl.logiknr
+        AND eastl.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.euiinstln
+        ON euiinstln.anlage = eastl.anlage
+        AND euiinstln.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.euitrans
+        ON euitrans.int_ui = euiinstln.int_ui
+        AND euitrans.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.jest
+        ON equi.objnr = jest.objnr
+        AND jest.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.tj02t
+        ON jest.stat = tj02t.istat
+        AND tj02t.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.equz
+        ON equz.equnr = equi.equnr
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.kssk
+        ON equi.equnr = kssk.objek
+        AND kssk.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.klah
+        ON kssk.clint = klah.clint
+        AND klah.deleteflag = 'FALSE'
+        AND (klah.class LIKE '%METER%' OR klah.class LIKE '%OUTSTATION%')
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.euihead
+        ON euitrans.int_ui = euihead.int_ui
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.eanl
+        ON eanl.anlage = euiinstln.anlage
+        AND eanl.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.evbs
+        ON evbs.vstelle = eanl.vstelle
+        AND evbs.deleteflag = 'FALSE'
+    INNER JOIN flk_dub_db_datalake_prd.staging_sap_wam.iflot
+        ON iflot.tplnr = evbs.haus
+        AND iflot.deleteflag = 'FALSE'
+    WHERE
+        -- "currently installed" logic, same as your original
+          TRY_TO_DATE(egerh.bis, 'YYYYMMDD') >= CURRENT_DATE
+      AND TRY_TO_DATE(eastl.bis, 'YYYYMMDD') >= CURRENT_DATE
+      AND egerh.deleteflag = 'FALSE'
+      AND UPPER(jest.inact) != 'X'
+      AND tj02t.txt04 = 'INST'
+      AND equz.datbi = '99991231'
+      AND equz.ingrp IS NOT NULL
+),
+
+cte_appointed_supplier AS (
+    SELECT
+        eservice.int_ui,
+        RIGHT(eservice.serviceid,4) AS serviceid
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.eservice eservice
+    WHERE eservice.deleteflag = 'FALSE'
+      AND TRY_TO_DATE(eservice.service_end, 'YYYYMMDD') > CURRENT_DATE
+      AND TRY_TO_DATE(eservice.service_start, 'YYYYMMDD') <= CURRENT_DATE
+      AND eservice.service = 'X'
+),
+
+cte_edf_active_mop AS (
+    SELECT
+        eservice.int_ui,
+        eservice.serviceid
+    FROM flk_dub_db_datalake_prd.staging_sap_wam.eservice eservice
+    WHERE eservice.deleteflag = 'FALSE'
+      AND TRY_TO_DATE(eservice.service_end, 'YYYYMMDD') > CURRENT_DATE
+      AND TRY_TO_DATE(eservice.service_start, 'YYYYMMDD') <= CURRENT_DATE
+      AND eservice.serviceid = 'MLOND'   -- i.e., EDF MOP
+),
+
+-- This is not a CTE in your original code, but we'll just inline it or do a small CTE for clarity.
+-- We need it for c2m_sp.meteroperatorkey = 'LOND' in the final WHERE.
+-- If you only want a direct join, you can skip making it a CTE:
+--   LEFT JOIN flk_dub_db_datalake_prd.persist_iac.p_servicepoint c2m_sp ...
+
+cte_p_servicepoint AS (
+    SELECT
+        mpancore,
+        isactive,
+        meteroperatorkey
+    FROM flk_dub_db_datalake_prd.persist_iac.p_servicepoint
+    WHERE isactive = 1
+)
+
+SELECT DISTINCT
+       cte_installed_meters.recordid       AS record_id,
+       cte_installed_meters.mpan,
+       cte_installed_meters.serge          AS msn,
+       DATE_FROM_PARTS(cte_installed_meters.baujj, 1, 1) AS manufacture_date
+FROM cte_installed_meters
+
+    LEFT JOIN cte_edf_active_mop
+        USING(int_ui)
+
+    LEFT JOIN cte_appointed_supplier
+        USING(int_ui)
+
+    LEFT JOIN cte_p_servicepoint AS c2m_sp
+        ON c2m_sp.mpancore = cte_installed_meters.mpan
+
+WHERE 
+      -- 1) The EDF MOP must be active
+      cte_edf_active_mop.serviceid IS NOT NULL
+
+  AND -- 2) The meter type must be in the listed eqart **or** the supplier is not EDFE
+      (
+          cte_installed_meters.eqart IN ('H','RCAMY','RCAMR','NCAMR')
+          OR cte_appointed_supplier.serviceid <> 'EDFE'
+      )
+  
+  AND -- 3) The meter operator key must be LOND
+      c2m_sp.meteroperatorkey = 'LOND'
+;

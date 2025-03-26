@@ -1,3 +1,6 @@
+# run_address_code <- TRUE
+run_address_code <- FALSE
+
 library(tidyr)
 library(stringr)
 library(devtools)
@@ -7,6 +10,9 @@ library(dplyr)
 library(data.table)
 library(purrr)
 library(writexl)
+library(openxlsx)
+library(readxl)
+library(lubridate)
 
 ############################################################################
 # IMPORTING FUNCTIONS
@@ -27,8 +33,8 @@ base_path <- "C:/Users/dyer07j/Desktop/Coding/sunset_github REPO/edf-sunset-sour
 sqlquery_sup <- read_file(file.path(base_path, "external-data/query-snowflake-sup.txt"))
 sqlquery_mop <- read_file(file.path(base_path, "external-data/query-snowflake-mop.txt"))
 # run query request using variable
-df_sup <- query_sf(sqlquery_sup, show.query = TRUE) # current load time: <1min
-df_mop <- query_sf(sqlquery_mop, show.query = TRUE) # current load time: <1min
+df_sup <- query_sf(sqlquery_sup, show.query = FALSE) # current load time: <1min
+df_mop <- query_sf(sqlquery_mop, show.query = FALSE) # current load time: <1min
 # clean any bad dates in df_mop
 df_mop$date_installed <- fix_invalid_dates(df_mop$date_installed)
 # Export queries to CSV files (for quicker loading in future)
@@ -46,6 +52,7 @@ df_sup <- read_csv(file.path(base_path,
                      eac_date            = col_datetime(format = "%Y-%m-%dT%H:%M:%SZ"),
                      .default            = col_guess()
                    )
+                   , na = c("Unknown","NA")
 )
 df_mop <- read_csv(file.path(base_path, "exported-data/df_mop_exported.csv"), 
                    col_types = cols(
@@ -66,10 +73,10 @@ df_mop <- read_csv(file.path(base_path, "exported-data/df_mop_exported.csv"),
 # Read ecoes query into single string variable
 sqlquery_ecoes <- read_file(file.path(base_path, "external-data/query-snowflake-ecoes.txt")) # does not currently include EDFE (Retail (Resi/SME)) supply OR DOES IT?!
 # run query request using variable
-df_ecoes <- query_sf(sqlquery_ecoes, show.query = TRUE)
+df_ecoes <- query_sf(sqlquery_ecoes, show.query = FALSE)
 
 # read external data files
-df_rts_ssc_codes <- read_csv(file.path(base_path, "external-data/data-files-that-need-constant-updating", "RTS SSC Codes.csv"),
+df_rts_ssc_codes <- read_csv(file.path(base_path, "external-data", "RTS SSC Codes.csv"),
                              col_types = cols(SSC_Id = col_double()))
 
 df_hh_eac <- read_csv(file.path(base_path, "external-data/data-files-that-need-constant-updating", "EBS_HH_EAC.csv"),
@@ -91,32 +98,35 @@ df_nhh_eac <- read_csv(file.path(base_path, "external-data/data-files-that-need-
 # Read ecoes query into single string variable
 sqlquery_jw_signalStrength <- read_file(file.path(base_path, "external-data/query-snowflake-jwSignal.txt"))
 # run query request using variable
-df_jw_signalStrength <- query_sf(sqlquery_jw_signalStrength, show.query = TRUE)
+df_jw_signalStrength <- query_sf(sqlquery_jw_signalStrength, show.query = FALSE)
 
-df_onSupplyMasters <- read_csv(file.path(base_path, "external-data/data-files-that-need-constant-updating", "onSupply_masterFinal.csv"),
-                       col_types = cols(
-                         MPAN = col_character(),
-                         TPIName = col_character(),
-                         Segment = col_character()
-                       ))
+df_masterFinal <- read_excel(list.files(path = file.path(base_path, "external-data", "data-files-that-need-constant-updating"),
+    pattern = "^Master Data Final.*\\.xlsx$",
+    full.names = TRUE
+  ),
+  sheet = "Data"
+)[, c("MPAN", "Segment")] %>%
+  mutate(MPAN = as.character(MPAN), Segment = as.character(Segment)) %>%
+  distinct(MPAN, .keep_all = TRUE)
+
 
 # Read W3W query into single string variable
 sqlquery_jw_W3W <- read_file(file.path(base_path, "external-data/query-snowflake-jwW3W.txt"))
 # run query request using variable
-df_jw_W3W <- query_sf(sqlquery_jw_W3W, show.query = TRUE)
+df_jw_W3W <- query_sf(sqlquery_jw_W3W, show.query = FALSE)
 
-# Read W3W query into single string variable
+# Read JWaddress query into single string variable
 sqlquery_jw_address <- read_file(file.path(base_path, "external-data/query-snowflake-jwAddress.txt"))
 # run query request using variable
-df_jw_address <- query_sf(sqlquery_jw_address, show.query = TRUE)
+df_jw_address <- query_sf(sqlquery_jw_address, show.query = FALSE)
 
 # Read IFS D1 query into single string variable
 sqlquery_ifs_D1s <- read_file(file.path(base_path, "external-data/query-snowflake-ifsD1s.txt"))
 # run query request using variable
-df_ifs_D1s <- query_sf(sqlquery_ifs_D1s, show.query = TRUE)
+df_ifs_D1s <- query_sf(sqlquery_ifs_D1s, show.query = FALSE)
 
 # read pre-IFS d1 data into variable df
-df_preIfs_D1s <- read_csv(file.path(base_path, "external-data/data-files-that-need-constant-updating", "D1 report 28_10_2024.csv"),
+df_preIfs_D1s <- read_csv(file.path(base_path, "external-data", "D1 report 28_10_2024.csv"),
                           col_types = cols(
                             record_id = col_character(),
                             mpan = col_character(),
@@ -139,6 +149,45 @@ df_MTS <- read_csv(file.path(base_path, "external-data/data-files-that-need-cons
                             sim_number = col_character()
                           ))
 
+
+df_centrestage <- read_csv(
+  file.path(base_path, "external-data", "data-files-that-need-constant-updating", "centrestage.csv"),
+  col_select = c("rn", "mpan", "msn", "certification_date", "certification_expiry_date", "date_removed"),
+  col_types = cols(
+    rn = col_integer(),
+    mpan = col_character(),
+    msn = col_character(),
+    certification_date = col_date(format = "%Y-%m-%d"),
+    certification_expiry_date = col_date(format = "%Y-%m-%d"),
+    date_removed = col_date(format = "%Y-%m-%d")
+  )
+) %>%
+  filter(rn == 1) %>%
+  mutate(
+    manufacture_date = certification_date,
+    recert_date = certification_expiry_date,
+    record_id = paste0(mpan, " - ", msn)) %>%
+  distinct() %>%
+  group_by(record_id) %>%
+  arrange(desc(recert_date)) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(-certification_date, -certification_expiry_date)
+
+# read SMART district codes
+df_SMARTDistricts <- read_csv(
+  file.path(base_path, "external-data", "Outcode_mappings_final.csv"),
+  col_select = c("Postcode", "DF district"),
+  col_types = cols(
+    Postcode = col_character(),
+    "DF district" = col_character()
+  ))
+
+# Read sapwam (manufacture date) query into single string variable
+sqlquery_sapwamManufacture <- read_file(file.path(base_path, "external-data/query-snowflake-sapwamManufacture.txt"))
+# run query request using variable
+df_sapwamManufacture <- query_sf(sqlquery_sapwamManufacture, show.query = FALSE)
+
 ############################################################################
 # REMOVING DUPLICATE ROWS FROM df_sup
 ############################################################################
@@ -159,6 +208,7 @@ df_sup_deduped_noNA <- df_sup_deduped %>%
 # see number of rows in df_sup AFTER duplicate rows removal
 print(paste0("No. rows after cleaning: ", nrow(df_sup_deduped_noNA)))
 
+
 ############################################################################
 # FURTHER df_sup & df_mop CLEANING
 ############################################################################
@@ -172,11 +222,9 @@ df_mop <- df_mop %>% select(-meter_category)
 # df_mop <- df_mop %>%
 #   mutate(import_export_flag = ifelse(grepl("-0000[0-9]$", meter_qualifier), "Export", "Import"))
 
-# add outcode column
-df_combined_cleaned <- df_combined_cleaned %>%
-  mutate(site_outcode = ifelse(str_detect(site_postcode, " "),
-                               word(site_postcode, 1),
-                               site_postcode))
+
+
+# write_csv(df_combined_cleaned_TEST, file.path(base_path, "exported-data/df_combined_cleaned_TEST.csv"))
 
 
 ############################################################################
@@ -186,8 +234,8 @@ df_combined_cleaned <- df_combined_cleaned %>%
 # 
 df_mop <- df_mop %>%
   left_join(
-    df_jw_address,
-    by = c("mpan" = "reference"), 
+    df_jw_address %>% select(mpan, site_address, site_postcode),
+    by = c("mpan"), 
     suffix = c(".mop", ".jw")    # Distinguish columns from each source
   ) %>%
   mutate(
@@ -196,16 +244,10 @@ df_mop <- df_mop %>%
     site_address  = coalesce(site_address.jw,  site_address.mop),
     site_postcode = coalesce(site_postcode.jw, site_postcode.mop)
   ) %>%
-  select(
     # Keep all the columns you need, but drop the .mop and .jw versions
     # once you've coalesced them into final columns:
-    -site_address.mop, 
-    -site_postcode.mop,
-    -site_address.jw, 
-    -site_postcode.jw,
-    -created_at
-  )
-
+  select(-ends_with(".mop"), -ends_with(".jw"))
+    
 
 ############################################################################
 # JOINING df_sup & df_mop
@@ -260,16 +302,19 @@ write_csv(df_sup_deduped_noNA, file.path(base_path, "exported-data/df_sup_dedupe
 
 # Perform a full join, keeping all (distinct) rows and columns
 df_combined <- full_join(df_sup_deduped_noNA, df_mop, by = c("msn", "mpan")) %>%
-  # Create the SUP_OR_MOP column based on whether in_sup / in_mop are NA or not
+  distinct() %>%
+  group_by(mpan) %>%
   mutate(
-    SUP_OR_MOP = case_when(
-      !is.na(in_sup) &  is.na(in_mop) ~ "SUP",   # present only in df_sup
-      is.na(in_sup) & !is.na(in_mop) ~ "MOP",   # present only in df_mop
-      !is.na(in_sup) & !is.na(in_mop) ~ "BOTH"   # present in both
+    sup_or_mop = if_else(
+      any(!is.na(in_sup)) & any(!is.na(in_mop)),
+      "BOTH",                              # MPAN appears in both datasets
+      if_else(any(!is.na(in_sup)), "SUP",   # only in df_sup
+              "MOP")                      # only in df_mop
     )
   ) %>%
-  distinct() %>%
+  ungroup() %>%
   select(-in_sup, -in_mop)
+
 
 # add record_id column back in
 df_combined <- df_combined %>%
@@ -333,8 +378,9 @@ for (col in columns_to_merge) {
         )
       )
   } else if (col %in% c("meter_type", "communication_method", "communication_address",
-                        # "eac", "profile_class", "meter_operator")) {
-                        "eac", "outstation_type", "ssc", "meter_operator")) {
+                        "eac", "outstation_type", "ssc", "meter_operator", "voltage_type",
+                        "ct_ratio"
+                        )) {
     # Prioritize MOP (.y) for these columns
     df_combined <- df_combined %>%
       mutate(
@@ -500,22 +546,26 @@ df_combined <- df_combined %>%
 # then join back up into 5 columns (keep full address column just in case)
 
 # !!!WARNING!!!
-# ON ~500K ROWS AND ~16 STREET COLUMNS), CAN TAKE ~130 MINS
-# 
-# # Automatically find all column names that start with "street"
-# street_cols_1 <- grep("^site_address_list_", names(df_combined), value = TRUE)
-# print_column_stats(df_combined[, street_cols_1])
-# 
-# time_then <- Sys.time()
-# df_combined_cleaned <- clean_address_data(df_combined)
-# time_now <- Sys.time()
-# print(time_now - time_then)
-# 
-# street_cols_2 <- grep("^site_address_list_", names(df_combined_cleaned), value = TRUE)
-# print_column_stats(df_combined_cleaned[, street_cols_2])
-# 
-# # safe copy to avoid constant rerunning and waiting times
-# df_combined_cleaned_SAFE <- df_combined_cleaned
+# THIS SNIPPET CAN TAKE 2-3 hours
+
+if (run_address_code) {
+  # The entire block below is run if run_address_code == TRUE
+  
+  # Automatically find all column names that start with "street"
+  street_cols_1 <- grep("^site_address_list_", names(df_combined), value = TRUE)
+  print_column_stats(df_combined[, street_cols_1])
+  
+  time_then <- Sys.time()
+  df_combined_cleaned <- clean_address_data(df_combined)
+  time_now <- Sys.time()
+  print(time_now - time_then)
+  
+  street_cols_2 <- grep("^site_address_list_", names(df_combined_cleaned), value = TRUE)
+  print_column_stats(df_combined_cleaned[, street_cols_2])
+  
+  # safe copy to avoid constant rerunning and waiting times
+  df_combined_cleaned_SAFE <- df_combined_cleaned
+}
 
 # use safe copies if needed:
 df_combined_cleaned <- df_combined_cleaned_SAFE
@@ -532,9 +582,6 @@ df_combined_cleaned <- df_combined_cleaned %>%
     site_postcode = if_else(!str_detect(site_postcode, "\\d"), "", site_postcode),
     site_postcode = str_trim(site_postcode), # trim again
   )
-
-
-
 
 
 ############################################################################
@@ -557,6 +604,7 @@ df_combined_cleaned <- df_combined_cleaned %>%
   select(-ends_with(".x"), -ends_with(".y"))
 
 
+
 # Create the 'rts_flag' column in df_combined
 df_combined_cleaned$rts_flag <- ifelse(df_combined_cleaned$ssc %in% df_rts_ssc_codes$SSC_Id, 'Y', 'N')
 
@@ -573,7 +621,7 @@ df_combined_cleaned <- df_combined_cleaned %>%
     eac = coalesce(as.numeric(eac.x), eac.y),
     
     # Update eac_date for any row that was successfully filled
-    eac_date = if_else(eac_filled, as.Date("2024-12-19"), as.Date(eac_date)) # this is just the date I "created" the hh eac data
+    eac_date = if_else(eac_filled, Sys.Date(), as.Date(eac_date)) # this is just the date I "created" the hh eac data
   ) %>%
   # Remove temporary columns
   select(-eac.x, -eac.y, -eac_filled)
@@ -605,6 +653,33 @@ df_combined_cleaned <- df_combined_cleaned %>%
     by = "record_id"
   )
 
+# add lat,long columns from jw into df_combined
+df_combined_cleaned <- df_combined_cleaned %>%
+  # First join on record_id to bring in geolocation columns
+  left_join(
+    df_jw_address %>%
+      select(record_id, geolocation_latitude, geolocation_longitude, geolocation),
+    by = "record_id",
+    suffix = c("", ".rid")
+  ) %>%
+  # Then join on mpan to bring in geolocation values for rows that didn't match by record_id
+  left_join(
+    df_jw_address %>%
+      select(mpan, geolocation_latitude, geolocation_longitude, geolocation),
+    by = "mpan",
+    suffix = c("", ".mpan")
+  ) %>%
+  # For each geolocation column, use the value from the record_id join if available; 
+  # if not, fall back to the value from the mpan join.
+  mutate(
+    geolocation_latitude = coalesce(geolocation_latitude, geolocation_latitude.mpan),
+    geolocation_longitude = coalesce(geolocation_longitude, geolocation_longitude.mpan),
+    geolocation = coalesce(geolocation, geolocation.mpan)
+  ) %>%
+  # Optionally remove the extra columns brought in from the mpan join
+  select(-ends_with(".mpan"), -ends_with(".rid"))
+
+
 # adding W3W data to df_combined
 # this uses some logic to get down to 1 set of data per unique mpan in df_jw_w3w
 # basically it uses rows with data, or arbitrarily the first in the group.
@@ -627,9 +702,9 @@ df_combined_cleaned <- df_combined_cleaned %>%
 # write_csv(df_jw_W3W, file.path(base_path, "exported-data/df_jw_w3w_anal.csv"))
 
 
-# adds tpi and segment to df_combined
+# adds segment to df_combined
 df_combined_cleaned <- df_combined_cleaned %>%
-  left_join(df_onSupplyMasters %>% select(MPAN, TPIName, Segment), by = c("mpan" = "MPAN"))
+  left_join(df_masterFinal %>% select(MPAN, Segment), by = c("mpan" = "MPAN"))
 
 
 # adds legacy (pre-IFS) and IFS D1 fault data
@@ -710,24 +785,295 @@ df_combined_cleaned <- df_combined_cleaned %>%
       NA_character_
     ),
     # Overwrite communication_method if we had a successful match
-    communication_method = case_when(
+    communication_address = case_when(
       record_id %in% df_MTS_cleaned$record_id_1 ~ 
         df_MTS_cleaned$remoteAddress[ match(record_id, df_MTS_cleaned$record_id_1) ],
       record_id %in% df_MTS_cleaned$record_id_2 ~ 
         df_MTS_cleaned$remoteAddress[ match(record_id, df_MTS_cleaned$record_id_2) ],
-      TRUE ~ communication_method
+      TRUE ~ communication_address
+    )
+  )
+
+# add outcode column
+df_combined_cleaned <- df_combined_cleaned %>%
+  mutate(site_outcode = ifelse(str_detect(site_postcode, " "),
+                               word(site_postcode, 1),
+                               site_postcode))
+
+# create SMART District column
+df_combined_cleaned <- df_combined_cleaned %>%
+  left_join(df_SMARTDistricts, by = c("site_outcode" = "Postcode")) %>%
+  rename(smart_district = `DF district`)
+
+# creating sunset_date column and adding initial data
+df_combined_cleaned <- df_combined_cleaned %>%
+  mutate(
+    sunset_date = case_when(
+      rts_flag == "Y"                              ~ as.Date("30-06-2025", format = "%d-%m-%Y"),
+      communication_method %in% c("CS", "GS")        ~ as.Date("01-12-2025", format = "%d-%m-%Y"),
+      communication_method == "PS"                   ~ as.Date("31-01-2027", format = "%d-%m-%Y"),
+      communication_method == "3G"                   ~ as.Date("01-01-2023", format = "%d-%m-%Y"),
+      TRUE                                         ~ NA_Date_
     )
   )
 
 
 
-# write_csv(df_combined_cleaned_TESTY, file.path(base_path, "exported-data/df_combined_cleaned_TEST.csv"))
 
+
+
+# write_csv(df_combined_cleaned_TEST, file.path(base_path, "exported-data/df_combined_cleaned_TEST.csv"))
+
+############################################################################
+# RECERT LOGIC AREA
+############################################################################
+
+# adds recert_date and manufacture_date from centrestage
+df_combined_cleaned <- df_combined_cleaned %>%
+  left_join(df_centrestage %>% select(record_id, manufacture_date, recert_date), by = "record_id")
+
+df_combined_cleaned <- df_combined_cleaned %>%
+  left_join(df_sapwamManufacture %>% select(record_id, manufacture_date), by = "record_id",
+    suffix = c("", ".sap")
+  ) %>%
+  mutate(
+    manufacture_date = coalesce(manufacture_date, manufacture_date.sap)
+  ) %>%
+  select(-manufacture_date.sap)
+
+# removes rows where removal date is before today
+df_combined_cleaned <- df_combined_cleaned %>%
+  anti_join(
+    df_centrestage %>% 
+      filter(date_removed < Sys.Date()),
+    by = "record_id"
+  )
+
+# using msn to estimate manufacture date
+# this does a good chunk of empty rows. 
+prefixes <- c("E", "EML", "EM", "D", "FF", "H", "HB", "I", "K", 
+              "MG", "N5", "N6", "N7", "N9", "NG", "P", "PN4", "V", "Z")
+
+pattern <- paste0("^(", paste(prefixes, collapse="|"), ")(\\d{2}).*")
+
+convert_two_digit_year <- function(two_digits) {
+  # If two_digits is NA or doesn't exist, return NA
+  if (is.na(two_digits)) return(NA_integer_)
+  
+  y <- as.integer(two_digits)
+  if (y >= 90 && y <= 99) {
+    return(1900 + y)
+  } else if (y >= 0 && y <= 25) {
+    return(2000 + y)
+  } else {
+    return(NA_integer_)
+  }
+}
+
+
+df_combined_cleaned <- df_combined_cleaned %>%
+  mutate(
+    # Extract any matching prefixes + two-digit years
+    match_matrix    = str_match(msn, pattern),
+    prefix_captured = match_matrix[, 2],
+    two_digits      = match_matrix[, 3],
+    four_digit_year = sapply(two_digits, convert_two_digit_year),
+    
+    # 1) Build a temporary date column based on your logic
+    new_date = as.Date(
+      ifelse(
+        !is.na(four_digit_year), 
+        paste0(four_digit_year, "-01-01"),  # e.g. "2003-01-01"
+        NA_character_
+      ),
+      format = "%Y-%m-%d"
+    ),
+    
+    # 2) Use coalesce to fill in only where the existing manufacture_date is NA
+    manufacture_date = coalesce(manufacture_date, new_date)
+  ) %>%
+  select(-match_matrix, -prefix_captured, -two_digits, -four_digit_year, -new_date)
+
+
+# if recert date is empty or after today, no recert required
+# this is a duplicate row to create the column before logic below
+df_combined_cleaned <- df_combined_cleaned %>%
+  mutate(
+    recert_required = if_else(!is.na(recert_date) & recert_date <= Sys.Date(), "Y", "N")
+  )
+
+
+df_combined_cleaned <- df_combined_cleaned %>%
+  mutate(
+    ## 1) Convert manufacture_date if not already Date:
+    manufacture_date = as.Date(manufacture_date, format = "%Y-%m-%d"),
+    
+    ## 2) Apply your original rules first:
+    #   - measurement_class in (C,E) => recert_date = +10 years
+    #   - measurement_class=F & wc_or_ct="ct" => recert_date = +10 years
+    #   - measurement_class in (B,D) => recert_required="N"
+    recert_date = case_when(
+      measurement_class %in% c("C", "E") ~ manufacture_date + years(10),
+      measurement_class == "F" & wc_or_ct == "ct" ~ manufacture_date + years(10),
+      TRUE ~ recert_date  # leave as-is for others
+    ),
+    recert_required = case_when(
+      measurement_class %in% c("B", "D") ~ "N",
+      TRUE ~ recert_required
+    )
+  ) %>%
+  ## 3) Now layer in the NEW logic (1→2→3→4).
+  mutate(
+    #### LOGIC 2: If row passes Logic 1 AND has meter_type in {RCAMR,RCAMY,NCAMR}
+    ####          AND “EDMI” in make_and_type (or outstation_type if that’s empty),
+    ####          THEN recert_required depends on manufacture_date < 2008 or ≥ 2008.
+    recert_required = case_when(
+      # Must pass Logic 1
+      (measurement_class %in% c("A", "G") | 
+         (measurement_class == "F" & wc_or_ct == "ct")) &
+        # meter_type is one of these
+        meter_type %in% c("RCAMR", "RCAMY", "NCAMR") &
+        # check for EDMI in make_and_type or outstation_type if make_and_type = ""
+        (
+          grepl("EDMI", make_and_type, ignore.case = TRUE) |
+          grepl("MK7", make_and_type, ignore.case = TRUE) |
+          grepl("MK10", make_and_type, ignore.case = TRUE) |
+            
+            (
+              make_and_type == "" & 
+                (
+                grepl("EDMI", outstation_type, ignore.case = TRUE) |
+                grepl("MK7", outstation_type, ignore.case = TRUE) |
+                grepl("MK10", outstation_type, ignore.case = TRUE)
+                )
+            )
+        ) &
+        manufacture_date < as.Date("2008-01-01") ~ "Y",
+      
+      # Same condition, but manufacture_date >= 01-01-2008 => "N"
+      (measurement_class %in% c("A", "G") | 
+         (measurement_class == "F" & wc_or_ct == "ct")) &
+        meter_type %in% c("RCAMR", "RCAMY", "NCAMR") &
+        (
+          grepl("EDMI", make_and_type, ignore.case = TRUE) |
+          grepl("MK7", make_and_type, ignore.case = TRUE) |
+          grepl("MK10", make_and_type, ignore.case = TRUE) |
+            
+            (
+              make_and_type == "" & 
+                (
+                grepl("EDMI", outstation_type, ignore.case = TRUE) |
+                grepl("MK7", outstation_type, ignore.case = TRUE) |
+                grepl("MK10", outstation_type, ignore.case = TRUE)
+                )
+            )
+        ) &
+        manufacture_date >= as.Date("2008-01-01") ~ "N",
+      
+      # Otherwise, keep whatever recert_required is currently
+      TRUE ~ recert_required
+    ),
+    
+    #### LOGIC 3: If row passes Logic 1 AND has “Elster” in make_and_type
+    ####           (or in outstation_type if make_and_type empty),
+    ####           set recert_date = +10 years from manufacture_date
+    recert_date = case_when(
+      (measurement_class %in% c("A", "G") | 
+         (measurement_class == "F" & wc_or_ct == "ct")) &
+        (
+          grepl("Elster", make_and_type, ignore.case = TRUE) |
+          grepl("AS230", make_and_type, ignore.case = TRUE) |
+          grepl("A1700", make_and_type, ignore.case = TRUE) |
+          grepl("A1160", make_and_type, ignore.case = TRUE) |
+          grepl("A1140", make_and_type, ignore.case = TRUE) |
+          grepl("AS3000P", make_and_type, ignore.case = TRUE) |
+          grepl("PB2", make_and_type, ignore.case = TRUE) |
+          grepl("PB3", make_and_type, ignore.case = TRUE) |
+          grepl("LM3", make_and_type, ignore.case = TRUE) |
+            
+            (
+              make_and_type == "" & 
+                (
+                  grepl("Elster", outstation_type, ignore.case = TRUE) |
+                  grepl("AS230", outstation_type, ignore.case = TRUE) |
+                  grepl("A1700", outstation_type, ignore.case = TRUE) |
+                  grepl("A1160", outstation_type, ignore.case = TRUE) |
+                  grepl("A1140", outstation_type, ignore.case = TRUE) |
+                  grepl("AS3000P", outstation_type, ignore.case = TRUE) |
+                  grepl("PB2", outstation_type, ignore.case = TRUE) |
+                  grepl("PB3", outstation_type, ignore.case = TRUE) |
+                  grepl("LM3", outstation_type, ignore.case = TRUE)
+                )
+            )
+        ) ~ manufacture_date + years(10),
+      TRUE ~ recert_date
+    ),
+    
+    #### LOGIC 4: If row passes Logic 1 AND has make_and_type that contains
+    ####           any of ("Sprint XP", "EDMI MK7B", "ISKRA", "AS230")
+    ####           (or outstation_type if make_and_type empty),
+    ####           then recert_required = "Y"
+    recert_required = case_when(
+      (measurement_class %in% c("A", "G") | 
+         (measurement_class == "F" & wc_or_ct == "ct")) &
+        (
+          grepl("Sprint XP", make_and_type, ignore.case=TRUE) |
+            grepl("EDMI MK7B", make_and_type, ignore.case=TRUE) |
+            grepl("ISKRA", make_and_type, ignore.case=TRUE) |
+            grepl("AS230", make_and_type, ignore.case=TRUE) |
+            (
+              make_and_type == "" & 
+                (
+                  grepl("Sprint XP", outstation_type, ignore.case=TRUE) |
+                    grepl("EDMI MK7B", outstation_type, ignore.case=TRUE) |
+                    grepl("ISKRA", outstation_type, ignore.case=TRUE) |
+                    grepl("AS230", outstation_type, ignore.case=TRUE)
+                )
+            )
+        ) ~ "Y",
+      TRUE ~ recert_required
+    )
+  ) %>%
+  mutate(
+    recert_date = case_when(
+      (measurement_class %in% c("A", "G") | (measurement_class == "F" & wc_or_ct == "ct")) &
+        is.na(recert_date) ~ manufacture_date + years(10),
+      TRUE ~ recert_date
+    )
+  )
+
+# if ANY meter is more than 20 years old, then set recert date to manufacture+20 and set recert_required to "Y".
+df_combined_cleaned <- df_combined_cleaned %>%
+  # Create a temporary flag for rows where recert_date is missing and manufacture_date is >20 years ago.
+  mutate(
+    update_flag = is.na(recert_date) & (manufacture_date <= Sys.Date() - years(20))
+  ) %>%
+  # Update recert_date and recert_required based on the flag.
+  mutate(
+    recert_date = if_else(update_flag, manufacture_date + years(20), recert_date),
+    recert_required = if_else(update_flag, "Y", recert_required)
+  ) %>%
+  # Remove the temporary flag.
+  select(-update_flag)
+
+
+# if recert date is empty or after today, no recert required
+# this is a duplicate row to catch rows after above logic
+df_combined_cleaned <- df_combined_cleaned %>%
+  mutate(
+    recert_required = if_else(!is.na(recert_date) & recert_date <= Sys.Date(), "Y", "N")
+  )
+
+
+# write_csv(df_combined_cleaned_TEST, file.path(base_path, "exported-data/df_combined_cleaned_TEST.csv"))
 
 
 
 ############################################################################
 # REDUCED VIEW (I.E., SINGLE VIEW OF DEMAND) EXPORT FOR SCALING PARTNERS
+############################################################################
+############################################################################
+# REMOVE AND REORDER COLUMNS
 ############################################################################
 
 # List of columns to remove
@@ -736,7 +1082,6 @@ columns_to_remove <- c(
   "meter_count", 
   
   # below is mop only
-  "customer_name_mop",
   "micro_flag",
   "undumbed_amr",
   "outstation_pin",
@@ -745,9 +1090,6 @@ columns_to_remove <- c(
   "mop_contract_reference",
   "ebs_mop_billing_status",
   "ebs_energy_segment",
-  "outcode",
-  "gsp_group",
-  "retrieval_method",
   "msmtd_efd",
   "cop",
   "multi_mpan",
@@ -756,7 +1098,6 @@ columns_to_remove <- c(
   "current_rating",
   "map_id",
   "edf_msn",
-  "ct_ratio",
   "vt_ratio",
   "feeder_status",
   "config_code",
@@ -766,10 +1107,105 @@ columns_to_remove <- c(
   "number_of_dials"
 )
 
-
 # Remove specified columns
 df_single_view <- df_combined_cleaned[, !names(df_combined_cleaned) %in% columns_to_remove]
 
+df_single_view <- unique(df_single_view)
+
+
+print(cat(names(df_single_view), sep = "\n"))
+
+# Desired column order
+desired_cols <- c(
+  "record_id",
+  "mpan",
+  "msn",
+  "meter_type",
+  "date_installed",
+  "profile_class",
+  "import_export_flag",
+  "rts_flag",
+  "ssc",
+  "energisation_status",
+  "energisation_status_date",
+  "make_and_type",
+  "ct_ratio",
+  "wc_or_ct",
+  "voltage_type",
+  "measurement_class",
+  "manufacture_date",
+  "recert_date",
+  "recert_required",
+  "outstation_id",
+  "outstation_type",
+  "meter_time_switch_code",
+  "communication_method",
+  "communication_provider",
+  "communication_address",
+  "retrieval_method",
+  "level_1_username",
+  "level_1_password",
+  "level_2_username",
+  "level_2_password",
+  "level_3_username",
+  "level_3_password",
+  "last_comms_dial_timestamp",
+  "last_comms_dial_outcome",
+  "sup_or_mop",
+  "supplier",
+  "supplier_tier",
+  "meter_operator",
+  "mop_start",
+  "mop_end",
+  "dc",
+  "da",
+  "dno",
+  "llf",
+  "customer_name",
+  "customer_active_date",
+  "contract_status",
+  "contract_start_date",
+  "sa_status",
+  "sa_start_date",
+  "sa_end_date",
+  "market",
+  "tpiname",
+  "Segment",
+  "site_address",
+  "site_address_list_1",
+  "site_address_list_2",
+  "site_address_list_3",
+  "site_address_list_4",
+  "site_address_list_5",
+  "site_postcode",
+  "site_outcode",
+  "smart_district",
+  "gsp_group",
+  "geolocation_latitude",
+  "geolocation_longitude",
+  "geolocation",
+  "site_w3w",
+  "meter_w3w",
+  "Last_EAC_Pot",
+  "L0038_RF_Status",
+  "eac",
+  "eac_date",
+  "type_name",
+  "signal_strength",
+  "status_comment",
+  "completed_date",
+  "short_text",
+  "notification_creation_date",
+  "fault_description"
+)
+
+# Reorder df_single_view columns
+df_single_view <- df_single_view[ , desired_cols]
+
+print(cat(names(df_single_view), sep = "\n"))
+
+# arrange by record_id
+df_single_view <- df_single_view %>% arrange(record_id)
 
 ############################################################################
 # COUNT POPULATED/BLANK CELLS IN SINGLE_VIEW
@@ -781,24 +1217,132 @@ blank_indicators <- c(
   "Missing", "missing", "MISSING", "--", "?", "Unknown", "unknown",
   "#N/A", ".", "\\N", "-", "NaN", "nan", "none"
 )
-
 # Convert columns to character and compute counts
 calc_counts <- function(x) {
   x_char <- as.character(x)
+  total <- length(x_char)
   populated <- sum(!is.na(x_char) & !(tolower(x_char) %in% tolower(blank_indicators)) & x_char != "")
   blank <- sum(is.na(x_char) | (tolower(x_char) %in% tolower(blank_indicators)) | x_char == "")
-  c(Populated = populated, Blank = blank)
+  percent_full <- (populated / total) * 100
+  c(Populated = populated, Blank = blank, Percent_Full = percent_full)
 }
-
 counts <- sapply(df_single_view, calc_counts)
 
+# Extract the "Percent_Missing" row (as a vector)
+percent_full_row <- counts["Percent_Full", ]
+
+
 ############################################################################
-# EXPORTING SINGLE VIEW OF DEMAND
+# FORMAT XLSX FILE READY FOR EXPORT
 ############################################################################
 
-# Export the modified dataframe to a CSV file
-# write_csv(df_single_view, file.path(base_path, "exported-data/single_view.csv"))
-write_xlsx(df_single_view, file.path(base_path, "exported-data/single_view.xlsx"))
+sections_df <- data.frame(
+  section = c("Meter details", "Comms details", "Meter agents", 
+              "Customer info", "Site location", "Settlement",
+              "Job details", "Fault details"),
+  ncols   = c(22, 12, 10, 10, 15, 4, 4, 3),
+  stringsAsFactors = FALSE
+)
+
+sections_df$end_col   <- cumsum(sections_df$ncols)
+sections_df$start_col <- sections_df$end_col - sections_df$ncols + 1
+
+wb <- createWorkbook()
+addWorksheet(wb, "SINGLEVIEW")
+
+writeData(
+  wb,
+  sheet = "SINGLEVIEW",
+  x = as.data.frame(t(percent_full_row)),
+  startRow = 2,
+  startCol = 1,
+  colNames = FALSE
+)
+
+writeData(
+  wb,
+  sheet = "SINGLEVIEW",
+  x = df_single_view,
+  startRow = 3,
+  startCol = 1,
+  headerStyle = createStyle(
+    fgFill = "#E2EFDA",
+    textDecoration = "bold",
+    halign = "center",
+    border = c("bottom","left","right")
+  )
+)
+
+# Merge cells and write the header label for each section:
+for (i in seq_len(nrow(sections_df))) {
+  start_col <- sections_df$start_col[i]
+  end_col   <- sections_df$end_col[i]
+  
+  mergeCells(
+    wb, 
+    "SINGLEVIEW", 
+    cols = start_col:end_col, 
+    rows = 1
+  )
+  
+  writeData(
+    wb, 
+    "SINGLEVIEW", 
+    sections_df$section[i],
+    startRow = 1,
+    startCol = start_col
+  )
+}
+
+# Apply a style over all of row 1
+# i.e., from col 1 to the maximum end_col from your sections
+addStyle(
+  wb, 
+  sheet = "SINGLEVIEW", 
+  style = createStyle(
+    fgFill = "#D9E1F2",
+    halign = "CENTER",
+    border = c("bottom", "left", "right")), 
+  rows = 1, 
+  cols = 1:max(sections_df$end_col), 
+  gridExpand = TRUE
+)
+
+
+setColWidths(wb, sheet = "SINGLEVIEW", cols = 1:max(sections_df$end_col), widths = "auto")
+
+# Number of columns in df_single_view:
+df_cols <- ncol(df_single_view)
+# Sum of all column widths in sections_df
+total_section_cols <- sum(sections_df$ncols)
+# If there's a mismatch, stop code before writing to file:
+if (df_cols != total_section_cols) {
+  stop(
+    "Column mismatch:\n",
+    "df_single_view has ", df_cols, " columns, but the sum of sections_df$ncols is ",
+    total_section_cols, ". Please fix before proceeding."
+  )
+}
+
+
+
+saveWorkbook(wb, file = file.path(base_path, "exported-data/single_view_FORMATTED.xlsx"), overwrite = TRUE)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -1,6 +1,7 @@
--- JAMES DYER SUPPLY QUERY (FUGDED)
 -- this takes a bit of MPAN logic from EBS MPAN Golden Table (Simon Aplin) (basically, SERVICEAGREEMENT
--- and LIVEACCOUNTFLAG checks) and adds to existing meter level query made by Charlie Reeves & Devon Brown
+-- and LIVEACCOUNTFLAG checks) along with some extra columns, and adds to existing meter level query made by Charlie Reeves & Devon Brown
+
+-- CREATE OR REPLACE TABLE WORKINGDB_EBS_PRD.METERING_OPERATIONS_TEST.TMP_JD_IFS_SUP_PORTFOLIO_TODAY AS
 
 WITH live_on_supply AS (
 SELECT DISTINCT
@@ -18,7 +19,7 @@ SELECT DISTINCT
   sa.SERVICEAGREEMENTID AS SAID,
   sa.SASTARTDATE,
   sa.SAENDDATE,
-  sa.SERVICEAGREEMENTSTATUS AS SASTATUS,
+  sa.SERVICEAGREEMENTSTATUS,
   saeff.RATESCHEDULEDESC AS SARATESCHEDULE,
   sp.MARKETSEGMENT_CURRENT AS MARKETSEGMENT,
   sp.SUPPLIERKEY,
@@ -44,7 +45,26 @@ SELECT DISTINCT
   ROW_NUMBER() OVER (
     PARTITION BY sp.MPANCORE
     ORDER BY con.CONTRACTSTARTDATE DESC
-  ) AS rn
+  ) AS rn,
+
+  LTRIM(RTRIM(sp.DATACOLLECTORKEY)) AS DATACOLLECTOR,
+  LTRIM(RTRIM(sp.DATAAGGREGATORKEY)) AS DATAAGGREGATOR,
+  sp.ENERGISATIONSTATUSKEY,
+  sp.ENERGISATIONSTATUSDATE,
+  LTRIM(RTRIM(sp.GSPGROUPIDKEY)) AS GSPGROUP,
+  CASE 
+    WHEN LTRIM(RTRIM(sp.GSPGROUPIDKEY)) IN ('_G') THEN 'Electricity North West'
+    WHEN LTRIM(RTRIM(sp.GSPGROUPIDKEY)) IN ('_P', '_H') THEN 'Scottish and Southern Electricity Networks'
+    WHEN LTRIM(RTRIM(sp.GSPGROUPIDKEY)) IN ('_N', '_D') THEN 'Scottish Power Energy Networks'
+    WHEN LTRIM(RTRIM(sp.GSPGROUPIDKEY)) IN ('_F', '_M') THEN 'Northern Powergrid'
+    WHEN LTRIM(RTRIM(sp.GSPGROUPIDKEY)) IN ('_B', '_E', '_K', '_L') THEN 'National Grid'
+    WHEN LTRIM(RTRIM(sp.GSPGROUPIDKEY)) IN ('_A', '_C', '_J') THEN 'UK Power Networks'
+    ELSE NULL
+  END AS DNONAME,
+  sp.LINELOSSFACTORKEY_CURRENT,
+  sp.LINELOSSFACTORVOLTAGE_CURRENT,
+  sp.METERTIMESWITCHCODEKEY,
+  LTRIM(RTRIM(sp.RETRIEVALMETHODKEY)) AS RETRIEVALMETHOD
 
 FROM FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.FACTSERVICEPOINT fsp
 JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMSERVICEPOINT sp ON fsp.SK_SERVICEPOINTID = sp.SK_SERVICEPOINTID
@@ -80,7 +100,7 @@ SELECT DISTINCT
   REGEXP_REPLACE(RTRIM(d1_dvc_identifier.id_value,'_P272'),'[[:punct:]]|[ ]','') AS msn,
   d1_dvc_cfg.eff_dttm AS date_installed,
   --d1_dvc_cfg.status_upd_dttm,
-  d1_dvc.d1_model_cd AS OutstationType
+  d1_dvc.d1_model_cd AS make_and_type
 FROM flk_dub_db_datalake_prd.staging_mdm.d1_dvc
 INNER JOIN flk_dub_db_datalake_prd.staging_mdm.d1_dvc_identifier
   ON d1_dvc_identifier.d1_device_id = d1_dvc.d1_device_id
@@ -190,9 +210,6 @@ eac_data AS (
         eac1.DATEVALUE
 )
 
--- james added this (fudge) to get the latest TPIName for each MPAN.
--- it should keep all contract rows and just get latest TPIName (i.e., it doesn't affect the queries number of total rows).
--- This will need to be looked at in the future so that correct TPI is used properly (not just latest. pulling correct tpi for correct contract/SA, etc).
 , latest_tpi AS (
     SELECT
        los.MPANCORE,
@@ -205,6 +222,34 @@ eac_data AS (
     ) = 1
 ),
 
+MeterDates AS (
+    SELECT
+         sp.MPANCORE,
+         mc.meterid,
+         CONCAT(sp.MPANCORE, ' - ', mc.meterid) AS record_id,
+         mc.INSTALLATIONDATE AS install_date,
+         NULLIF(mc.REMOVALDATE, '2079-01-01') AS removal_date,
+
+	 CASE 
+             WHEN mc.CTRATIO IS NULL 
+                  OR UPPER(TRIM(mc.CTRATIO)) IN (
+                         '','UNKNOWN','UNKNWN','N/A','NA','NULL','WHOLE'
+                    )
+                  THEN 'W/C'
+             WHEN UPPER(TRIM(mc.CTRATIO)) = 'WC' 
+                  THEN 'W/C'
+             ELSE mc.CTRATIO
+          END AS ct_ratio
+
+    FROM FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.FACTMETERCONFIGURATION fmcf
+    JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMMEASURINGCOMPONENT mc
+         ON mc.SK_MEASURINGCOMPONENTID = fmcf.SK_MEASURINGCOMPONENTID
+    JOIN FLK_DUB_DB_DATALAKE_PRD.DIMENSIONAL_IAC.DIMSERVICEPOINT sp
+         ON sp.SK_SERVICEPOINTID = fmcf.SK_SERVICEPOINTID
+    WHERE mc.INSTALLATIONDATE <> '2079-01-01'
+),
+
+
 -- MAIN SELECT
 main as (
 SELECT DISTINCT
@@ -214,7 +259,7 @@ SELECT DISTINCT
   im.msn AS msn,
   mt.char_val AS meter_type,
   TO_DATE(im.date_installed) AS date_installed,
-  im.OutstationType AS outstation_type, --fine
+  im.make_and_type AS make_and_type, 
   cm.char_val AS communication_method,
   ca.adhoc_char_val AS communication_address,
   los.SAIMPORTEXPORTFLAG AS import_export_flag,
@@ -248,7 +293,30 @@ SELECT DISTINCT
   los.SUPPLIERKEY AS supplier,
   --los.marketsegment,
   lts.TPIName,
+  los.DATACOLLECTOR AS dc,
+  los.DATAAGGREGATOR AS da,
+  los.SASTARTDATE as sa_start_date,
+  los.SAENDDATE sa_end_date,
+  los.SERVICEAGREEMENTSTATUS AS SA_STATUS,
+  los.ENERGISATIONSTATUSKEY AS ENERGISATION_STATUS,
+  los.ENERGISATIONSTATUSDATE AS ENERGISATION_STATUS_DATE,
+  los.GSPGROUP as gsp_group,
+  los.DNONAME as dno,
+  los.LINELOSSFACTORKEY_CURRENT as llf,
+  los.LINELOSSFACTORVOLTAGE_CURRENT as voltage_type,
+  los.METERTIMESWITCHCODEKEY AS METER_TIME_SWITCH_CODE,
+  los.RETRIEVALMETHOD as retrieval_method,
+  los.contractstartdate as contract_start_date,
 
+  md.install_date,
+  md.removal_date,
+  COALESCE(md.ct_ratio, 'W/C') AS ct_ratio,
+  CASE 
+    WHEN COALESCE(md.ct_ratio, 'W/C') = 'W/C' THEN 'WC'
+    ELSE 'CT'
+  END AS wc_or_ct,
+
+  
 FROM live_on_supply los
 INNER JOIN installed_meters im ON im.MPAN = los.mpancore --CHANGED FROM LEFT TO ONLY INCLUDE INSTALLED METERS FOR EBS SUPPLY
 LEFT JOIN latest_tpi lts ON lts.MPANCORE = los.MPANCORE
@@ -259,6 +327,11 @@ LEFT JOIN com_method cm ON cm.d1_device_id = im.d1_device_id
 --LEFT JOIN flk_dub_db_datalake_prd.dim_consumption_iac.v_dimservicepoint vdsp ON vdsp.SITEID = los.siteid
 --LEFT JOIN ecoes_count ec ON ec.mpan = los.mpancore)
 LEFT JOIN eac_data ON eac_data.MPANCORE = los.mpancore AND eac_data.ACCOUNTID = los.ACCOUNTID
+LEFT JOIN MeterDates md ON md.record_id = CONCAT(los.MPANCORE, ' - ', im.msn)
+    AND (los.SASTARTDATE BETWEEN md.install_date AND COALESCE(md.removal_date, '9999-12-31')
+         OR md.install_date BETWEEN los.SASTARTDATE AND los.SAENDDATE)
+WHERE md.removal_date IS NULL OR md.removal_date > CURRENT_DATE()
 )
 
-select distinct * from main ORDER BY mpan, msn
+select distinct * from main
+ORDER BY mpan, msn

@@ -1,5 +1,4 @@
 SELECT DISTINCT
-    -- 1) Your existing MPAN_LOOKUP logic:
     CASE
         WHEN REGEXP_SUBSTR(J.CONTACT_REFERENCE, 'MSID\\s+\\d+') IS NOT NULL 
             THEN REGEXP_SUBSTR(J.CONTACT_REFERENCE, 'MSID\\s+\\d+')

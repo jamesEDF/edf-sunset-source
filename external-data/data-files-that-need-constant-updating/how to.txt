@@ -1,0 +1,21 @@
+STRAIGHT REPLACE
+centrestage.csv
+\\customer\shared\Exeter\Metering Operations\Reporting and Databases\Centrestage Data
+
+Master Data Final 03.03.2025.xlsx
+
+MTS_success_testid.csv
+\\customer.edfenergy.net\SHARED\Bengeworth\CAS\Energy Solutions Delivery\Metering\Reporting\COMMs\Comms Useful Data
+
+
+ALTERED FILES 
+!!!CONVERT MPAN TO NUMBER!!!
+
+EBS_HH_EAC.csv
+\\Customer\Shared\Exeter\Major_Business\Customer_Service\SACA\Agent_Management\Half Hourly Data Quality\Estimation Report (Rolling)
+eac = ((`TOTAL (A)` + `TOTAL (E)`) / day_diff) * 365
+day_diff = last_date in file to R1_date, e.g., 5Nov(R1)-->17Dec(last date) = 42
+=((B2+C2)/42)*365
+
+EBS_NHH_EAC.csv
+\\Customer\Shared\Exeter\Metering Operations\Reporting and Databases\LTNR

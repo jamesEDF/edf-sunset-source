@@ -48,23 +48,25 @@ dedupe_one_record_id <- function(df_subset) {
     }
   }
   if (nrow(df_subset) <= 1) return(df_subset)
-  
+
   # ---- RULE 2: If date_installed differs, keep rows with the latest date_installed ----
   if ("date_installed" %in% differ_cols) {
     df_subset <- pick_latest_keep_ties(df_subset, "date_installed")
   }
   if (nrow(df_subset) <= 1) return(df_subset)
   
-  # ---- RULE 3: If customer_name differs, pick rows w/ latest customer_active_date ----
-  if ("customer_name" %in% differ_cols && "customer_active_date" %in% names(df_subset)) {
-    df_subset <- pick_latest_keep_ties(df_subset, "customer_active_date")
-  }
-  if (nrow(df_subset) <= 1) return(df_subset)
+  # BELOW TWO WERE COMMENTED OUT AS THEY REMOVE 5 ROWS EACH
   
-  # ---- RULE 4: If eac_date differs, keep rows w/ latest eac_date ----
-  if ("eac_date" %in% differ_cols) {
-    df_subset <- pick_latest_keep_ties(df_subset, "eac_date")
-  }
+  # # ---- RULE 3: If customer_name differs, pick rows w/ latest customer_active_date ----
+  # if ("customer_name" %in% differ_cols && "customer_active_date" %in% names(df_subset)) {
+  #   df_subset <- pick_latest_keep_ties(df_subset, "customer_active_date")
+  # }
+  # if (nrow(df_subset) <= 1) return(df_subset)
+  # 
+  # # ---- RULE 4: If eac_date differs, keep rows w/ latest eac_date ----
+  # if ("eac_date" %in% differ_cols) {
+  #   df_subset <- pick_latest_keep_ties(df_subset, "eac_date")
+  # }
   
   # If multiple rows remain after all rules, keep them all
   # ("skip that set" if they're truly tied in all relevant columns).
